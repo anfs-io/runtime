@@ -32,6 +32,7 @@ import (
 	"github.com/anfs-io/runtime/go/internal/bus"
 	"github.com/anfs-io/runtime/go/internal/config"
 	"github.com/anfs-io/runtime/go/internal/dispatch"
+	"github.com/anfs-io/runtime/go/internal/podman"
 	"github.com/anfs-io/runtime/go/internal/shipper"
 	"github.com/anfs-io/runtime/go/internal/sink"
 	"github.com/anfs-io/runtime/go/internal/space"
@@ -42,11 +43,13 @@ import (
 // version is stamped by the release build (-ldflags "-X main.version=v0.1.0")
 var version = "dev"
 
-const usage = `anfsd: the anfs daemon (the event log to NATS JetStream; dispatch rules; their runs)
+const usage = `anfsd: the anfs daemon (the event log to NATS JetStream; dispatch rules; their runs;
+podman's container and pod events)
 
 Usage:
-  anfsd run          ship, dispatch and supervise until SIGTERM (run by launchd or
-                     systemd: anfs bus start); SIGHUP reads the rules again
+  anfsd run          ship, dispatch, supervise and follow podman events until SIGTERM
+                     (run by launchd or systemd: anfs bus start); SIGHUP reads the
+                     rules again
   anfsd ship --once  ship what is pending, then exit
   anfsd rules [--json] [space.yml...]
                      every rule of the installed spaces (wsm ls --json), or of the
@@ -64,7 +67,8 @@ Usage:
 
 Reads ~/.config/anfsd/anfsd.env and anfsd.local.env (the environment wins), NATS's
 port and the anfsd user's password from ~/.local/state/nats; keeps its cursors in
-~/.local/state/anfsd/cursors.json and its runs in ~/.local/state/anfsd/runs/.
+~/.local/state/anfsd/cursors.json, its runs in ~/.local/state/anfsd/runs/ and
+podman's state in ~/.local/state/anfsd/podman.json.
 Logs to stderr.
 `
 
@@ -177,6 +181,14 @@ func daemon(logf func(string, ...any)) int {
 	wg.Add(2)
 	go func() { defer wg.Done(); d.Run(ctx, b) }()
 	go func() { defer wg.Done(); (&sink.Sink{Logf: logf}).Run(ctx, b) }()
+	pw := &podman.Watcher{Events: cfg.Paths.Events, StateFile: filepath.Join(cfg.Paths.State, "podman.json"), Logf: logf}
+	if cfg.Settings.Podman {
+		wg.Add(1)
+		go func() { defer wg.Done(); pw.Run(ctx) }()
+	} else {
+		logf("podman: off (ANFSD_PODMAN=off)")
+		pw.Off()
+	}
 
 	// SIGHUP (anfs bus reload): the rules again
 	hup := make(chan os.Signal, 1)

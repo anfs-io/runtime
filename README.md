@@ -21,9 +21,18 @@ job, in its own session, with the access its harness can enforce, its life recor
 sink**: the consumer `anfsd-sink-report` hands each `report.*` event to `anfs report __sink`, which
 renders the report records into the report file.
 
+And **the podman follower** (agents/02c): one child, `podman events --format json --filter
+type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,
+died, removed, paused, unpaused, a change of health; a pod's created, started, stopped, removed)
+it writes into the host scope as `container.<verb>` and `pod.<verb>` (actor `podman`, subject the
+name, data `id`, `image`, `pod`, `exit`, `health`, `pcm`). The same container, status and second
+is one event, at most 20 a second. Podman away (not installed, the podman machine stopped): the
+child is started again after 5, 10, 30, then every 60 s, with `podman.connected` and
+`podman.disconnected` around each connection; nothing polls. `ANFSD_PODMAN=off` turns it off.
+
 ```
-anfsd run          ship, dispatch, supervise until SIGTERM (launchd or systemd runs it: anfs bus
-                   start); SIGHUP reads the rules again (anfs bus reload)
+anfsd run          ship, dispatch, supervise, follow podman until SIGTERM (launchd or systemd
+                   runs it: anfs bus start); SIGHUP reads the rules again (anfs bus reload)
 anfsd ship --once  ship what is pending, then exit
 anfsd rules [--json] [space.yml...]       the rules and their status (anfs agents rules)
 anfsd match [--json] --type T [--subject S] [--data K=V]... [--space S] | --event FILE
@@ -34,8 +43,8 @@ anfsd version
 
 It reads `~/.config/anfsd/anfsd.env` and `anfsd.local.env` (the environment wins), NATS's port and
 the `anfsd` user's password from `~/.local/state/nats/`, and keeps `~/.local/state/anfsd/`
-(`cursors.json`, `anfsd.pid`, `runs/`). It runs `wsm ls --json`, `anfs work new|path|env`, `anfs
-report __sink` and the harnesses from its service's PATH. It is installed and run by core's `core/anfsd` package; a person
+(`cursors.json`, `anfsd.pid`, `runs/`, `podman.json`). It runs `wsm ls --json`, `anfs work
+new|path|env`, `anfs report __sink`, the harnesses and `podman events` from its service's PATH. It is installed and run by core's `core/anfsd` package; a person
 uses it through `anfs bus` (status, start, stop, logs).
 
 ## Build and test

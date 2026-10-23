@@ -509,6 +509,10 @@ func TestGuardsBookkeeping(t *testing.T) {
 	if n := r.sup.Starts(sid, "r", time.Now().Add(-time.Minute)); n != 2 {
 		t.Errorf("a rejection counted against rate: %d", n)
 	}
+	// both runs end before the temp dirs go: a run outlives its supervisor, and its wrapper would
+	// write the exit status into a directory being removed (a flaky cleanup)
+	r.waitState(a.ID, Completed, 10*time.Second)
+	r.waitState(b.ID, Completed, 10*time.Second)
 }
 
 func TestParseEnv(t *testing.T) {

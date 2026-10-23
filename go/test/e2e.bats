@@ -4,7 +4,11 @@
 # spool of fixture lines. Every line is in the stream ANFS once; kill -9 anfsd, append, restart:
 # still once each. A dispatch rule (02b) with the fake harness (internal/testfake: never a real
 # one) and a fake wsm and anfs on PATH: one report.filed line in the spool is a run, its
-# run.submitted, run.working and run.completed in the stream. Skipped, saying so, when nats-server or the nats CLI is not on PATH.
+# run.submitted, run.working and run.completed in the stream. The fake podman (internal/testfake:
+# never the real one) printing a recorded container start: container.started in the stream on
+# anfs.host.container.started. The other tests turn podman off (ANFSD_PODMAN=off), so a Linux
+# host's /usr/bin/podman is never run. Skipped, saying so, when nats-server or the nats CLI is not
+# on PATH.
 # Run: bats go/test/e2e.bats </dev/null   (from the repo's root; CI puts the pinned binaries on PATH)
 
 bats_require_minimum_version 1.5.0
@@ -71,9 +75,9 @@ spool() {
   for (( i = from; i <= to; i++ )); do line "$scope" "$i" >> "$EV/$scope/2026-10.jsonl"; done
 }
 
-# anfsd with the system's PATH only: no wsm, anfs or harness of the person's is ever run
+# anfsd with the system's PATH only: no wsm, anfs or harness of the person's is ever run; podman off
 start_anfsd() {
-  PATH=/usr/bin:/bin "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
+  ANFSD_PODMAN=off PATH=/usr/bin:/bin "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
   ANFSD_PID=$!
 }
 
@@ -172,7 +176,7 @@ YML
   : > "$BATS_TEST_TMPDIR/fctl/commit"
   # the fake writes its record into FAKE_LOG; anfsd's PATH holds only the fakes and the system
   FAKE_LOG="$BATS_TEST_TMPDIR/flog" FAKE_CTL="$BATS_TEST_TMPDIR/fctl" FAKE_WORK="$BATS_TEST_TMPDIR/fwork" \
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 PATH="$bin:/usr/bin:/bin" \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 ANFSD_PODMAN=off PATH="$bin:/usr/bin:/bin" \
     "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
   ANFSD_PID=$!
   local i
@@ -195,4 +199,37 @@ YML
   grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/flog/anfs.log"
   run nats stream get ANFS --last-for anfs.abcde23456.run.completed --json
   [[ "$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)" == *'"commits":"core:1"'* ]]
+}
+
+@test "podman: a container started is container.started in the stream, on anfs.host.container.started" {
+  local fakes="$BATS_TEST_DIRNAME/../internal/testfake/testdata" bin="$BATS_TEST_TMPDIR/bin" i
+  mkdir -p "$bin" "$BATS_TEST_TMPDIR/flog" "$BATS_TEST_TMPDIR/fctl"
+  ln -s "$fakes/fake-podman" "$bin/podman"
+  printf '#!/bin/sh\necho "[]"\n' > "$bin/wsm"
+  chmod +x "$bin/wsm"
+  echo "run forever" > "$BATS_TEST_TMPDIR/fctl/podman"
+  # the recorded glitchtip lifecycle: its start, and the noise around it
+  grep '"Name":"glitchtip_web_1"' "$BATS_TEST_DIRNAME/../internal/podman/testdata/events.jsonl" > "$BATS_TEST_TMPDIR/fctl/podman.lines"
+  FAKE_LOG="$BATS_TEST_TMPDIR/flog" FAKE_CTL="$BATS_TEST_TMPDIR/fctl" PATH="$bin:/usr/bin:/bin" \
+    "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
+  ANFSD_PID=$!
+  for i in $(seq 100); do
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.host.container.removed": 1'* ]] && break
+    sleep 0.1
+  done
+  run nats stream subjects ANFS --json
+  [[ "$output" == *'"anfs.host.podman.connected": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.host.container.started": 1'* ]]
+  [[ "$output" == *'"anfs.host.container.created": 1'* ]]
+  [[ "$output" == *'"anfs.host.container.health": 2'* ]]
+  [[ "$output" == *'"anfs.host.container.died": 1'* ]]
+  [[ "$output" != *exec* && "$output" != *sync* ]]
+  run nats stream get ANFS --last-for anfs.host.container.started --json
+  local ev
+  ev=$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)
+  [ "$(yq -p json -oy -r '.subject' <<< "$ev")" = glitchtip_web_1 ]
+  [ "$(yq -p json -oy -r '.actor' <<< "$ev")" = podman ]
+  [ "$(yq -p json -oy -r '.data.pcm' <<< "$ev")" = glitchtip ]
+  [ "$(yq -p json -oy -r '.data.id' <<< "$ev")" = 2f820df40bb2 ]
+  grep -q '"state":"connected"' "$HOME/.local/state/anfsd/podman.json"
 }

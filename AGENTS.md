@@ -25,9 +25,13 @@ go/internal/supervise        the runs: records (runs/<id>/run.json), the queue, 
 go/internal/harness          one file per harness: claude, opencode, pi, antigravity (argv, env, files),
                              the summary of a run's output, the text of its stream
 go/internal/sink             the consumer anfsd-sink-report: anfs report __sink per report.* event
+go/internal/podman           podman events -> container.*, pod.* in the host scope: kept statuses, health
+                             changes only, coalesced per container/status/second, 20/s; the child
+                             restarted after 5, 10, 30, 60 s; podman.connected/disconnected; podman.json
+                             (testdata/events.jsonl: recorded on a Mac, podman 6.1.1)
 go/internal/testnats         an embedded nats-server for tests (restartable, same port and store)
 go/internal/testfake         the fakes tests run instead of programs: an agent CLI (as claude, opencode,
-                             pi, agy), anfs (work, report __sink), wsm
+                             pi, agy), anfs (work, report __sink), wsm, podman (away, or recorded lines)
 go/test/e2e.bats             the real nats-server and the built anfsd in a temp HOME
 .github/workflows            ci.yml (push, PR), release.yml (v* tags)
 ```
@@ -53,6 +57,11 @@ go/test/e2e.bats             the real nats-server and the built anfsd in a temp 
 - **Never a real harness in a test.** Every agent CLI, `anfs` and `wsm` a test runs is
   `internal/testfake`'s, on a PATH of the fakes and the system's (`/usr/bin:/bin`); the e2e bats does
   the same. A harness's flags are checked against `--help` only, by hand.
+- **Never the real podman in a test**: `testfake`'s podman (away by default: as a stopped machine),
+  and `ANFSD_PODMAN=off` where podman is not the subject (a Linux host's `/usr/bin/podman` is on
+  the system PATH). No test starts or stops a container or a podman machine.
+- **Podman away is not a loop**: the child is started again only after 5, 10, 30, then 60 s; a
+  connection up a minute resets that; `cmd/anfsd`'s idle test runs with podman away throughout.
 - **No spinning on a failing harness**: a run is never restarted but for `retries:` (at most 2,
   30 s then 2 min apart), and `rate:` caps starts per rule; the adopted runs' 10 s check runs only
   while one is adopted.

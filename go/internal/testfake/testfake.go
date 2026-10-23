@@ -1,7 +1,8 @@
 // Package testfake sets up the fakes anfsd's tests run instead of real programs: a fake agent CLI
 // linked as claude, opencode, pi and agy (testdata/fake-harness), a fake anfs (testdata/fake-anfs:
-// anfs work and anfs report __sink), and a fake wsm that prints a fixed `wsm ls --json`. No test
-// ever starts a real harness: PATH is the fakes' directory and the system's own.
+// anfs work and anfs report __sink), a fake wsm that prints a fixed `wsm ls --json`, and a fake
+// podman (testdata/fake-podman: away unless told to print recorded `podman events` lines). No
+// test ever starts a real harness or podman: PATH is the fakes' directory and the system's own.
 package testfake
 
 import (
@@ -14,7 +15,7 @@ import (
 
 // Fakes is one test's set.
 type Fakes struct {
-	Bin  string // on PATH first: claude, opencode, pi, agy, anfs, anfs-work, wsm
+	Bin  string // on PATH first: claude, opencode, pi, agy, anfs, anfs-work, wsm, podman
 	Anfs string // the fake anfs
 	Log  string // what the fakes record ($FAKE_LOG)
 	Ctl  string // what they are told ($FAKE_CTL)
@@ -44,6 +45,7 @@ func New(t testing.TB) *Fakes {
 			t.Fatal(err)
 		}
 	}
+	os.Symlink(filepath.Join(Dir(), "fake-podman"), filepath.Join(f.Bin, "podman"))
 	f.Anfs = filepath.Join(f.Bin, "anfs")
 	os.Symlink(filepath.Join(Dir(), "fake-anfs"), f.Anfs)
 	os.WriteFile(filepath.Join(f.Bin, "anfs-work"), []byte("#!/bin/sh\nexec anfs work \"$@\"\n"), 0o755)
@@ -59,6 +61,21 @@ func (f *Fakes) Wsm(json string) {
 
 // Mode tells the fake harness what to do next (ok, exit N, sleep N, child, fail-once).
 func (f *Fakes) Mode(m string) { os.WriteFile(filepath.Join(f.Ctl, "mode"), []byte(m), 0o644) }
+
+// Podman tells the fake podman what to do at its next start (away, run N, run forever) and, with
+// lines, what it prints (recorded podman events JSON, one a line).
+func (f *Fakes) Podman(mode, lines string) {
+	os.WriteFile(filepath.Join(f.Ctl, "podman"), []byte(mode), 0o644)
+	if lines != "" {
+		os.WriteFile(filepath.Join(f.Ctl, "podman.lines"), []byte(lines), 0o644)
+	}
+}
+
+// PodmanStarts is how many times the fake podman was started.
+func (f *Fakes) PodmanStarts() int {
+	b, _ := os.ReadFile(filepath.Join(f.Log, "podman.log"))
+	return strings.Count(string(b), "\n")
+}
 
 // Touch makes a control file (commit, sink-fail).
 func (f *Fakes) Touch(name, content string) {

@@ -24,7 +24,7 @@ import (
 type Paths struct {
 	Home      string
 	Config    string // $XDG_CONFIG_HOME/anfsd
-	State     string // $XDG_STATE_HOME/anfsd: cursors.json, anfsd.pid, anfsd.log (macOS), runs/
+	State     string // $XDG_STATE_HOME/anfsd: cursors.json, anfsd.pid, anfsd.log (macOS), runs/, podman.json
 	Runs      string // $XDG_STATE_HOME/anfsd/runs: one directory per run (02b)
 	Events    string // $XDG_STATE_HOME/anfs/events: the spool (lib/anfs/events.sh writes it)
 	NatsState string // $XDG_STATE_HOME/nats: port, users/anfsd (core/nats writes them)
@@ -38,6 +38,7 @@ type Settings struct {
 	ShipRate       float64       // ANFSD_SHIP_RATE (100 events/s per scope)
 	ShipBurst      int           // ANFSD_SHIP_BURST (1000)
 	MaxRuns        int           // ANFSD_MAX_RUNS (2): runs at once on this host
+	Podman         bool          // ANFSD_PODMAN (on): follow podman events into the host scope
 }
 
 // Nats is how anfsd connects: the URL from core/nats's port file, the anfsd user and its password.
@@ -63,6 +64,7 @@ func Defaults() Settings {
 		ShipRate:       100,
 		ShipBurst:      1000,
 		MaxRuns:        2,
+		Podman:         true,
 	}
 }
 
@@ -143,7 +145,7 @@ func ReadSettings(p Paths, lookup func(string) (string, bool)) (map[string]strin
 }
 
 var settingNames = []string{
-	"ANFSD_STREAM_MAX_AGE", "ANFSD_STREAM_MAX_BYTES", "ANFSD_DUP_WINDOW", "ANFSD_SHIP_RATE", "ANFSD_SHIP_BURST", "ANFSD_MAX_RUNS",
+	"ANFSD_STREAM_MAX_AGE", "ANFSD_STREAM_MAX_BYTES", "ANFSD_DUP_WINDOW", "ANFSD_SHIP_RATE", "ANFSD_SHIP_BURST", "ANFSD_MAX_RUNS", "ANFSD_PODMAN",
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -224,6 +226,13 @@ func ParseSettings(vals map[string]string) (Settings, error) {
 		if s.MaxRuns, err = strconv.Atoi(v); err != nil || s.MaxRuns < 1 {
 			return s, fmt.Errorf("ANFSD_MAX_RUNS=%s: a positive whole number", v)
 		}
+	}
+	switch v := vals["ANFSD_PODMAN"]; v {
+	case "", "on":
+	case "off":
+		s.Podman = false
+	default:
+		return s, fmt.Errorf("ANFSD_PODMAN=%s: on or off", v)
 	}
 	return s, nil
 }

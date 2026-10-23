@@ -1,0 +1,25 @@
+#!/bin/sh
+# A fake podman for anfsd's tests: never the real one, never a container. It records each start
+# ("<seconds> <args>") in $FAKE_LOG/podman.log, then does what $FAKE_CTL/podman says:
+#   away (the default)  podman's error when it cannot reach its machine, exit 125
+#   run N               print $FAKE_CTL/podman.lines (recorded `podman events --format json`), stay
+#                       N seconds, then exit 125 as if the connection went
+#   run forever         print the lines, then stay until killed
+echo "$(date +%s) $*" >> "$FAKE_LOG/podman.log"
+mode=away
+[ ! -f "$FAKE_CTL/podman" ] || mode=$(cat "$FAKE_CTL/podman")
+case "$mode" in
+  away)
+    echo 'Error: Cannot connect to Podman. Please verify your connection to the Linux system using `podman system connection list`, or try `podman machine init` and `podman machine start` to manage a new Linux VM' >&2
+    exit 125 ;;
+  "run forever")
+    [ ! -f "$FAKE_CTL/podman.lines" ] || cat "$FAKE_CTL/podman.lines"
+    exec sleep 3600 ;;
+  run\ *)
+    [ ! -f "$FAKE_CTL/podman.lines" ] || cat "$FAKE_CTL/podman.lines"
+    sleep "${mode#run }"
+    echo 'Error: unexpected EOF' >&2
+    exit 125 ;;
+esac
+echo "fake podman: unknown mode $mode" >&2
+exit 2

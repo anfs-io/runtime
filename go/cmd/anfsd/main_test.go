@@ -68,7 +68,9 @@ func env(t *testing.T, h string) (*testfake.Fakes, []string) {
 }
 
 // anfsd run: ships the backlog, writes its pid; idle, it uses almost no CPU (no loop: the
-// 2026-10-23 incident); SIGTERM ends it with exit 0, the cursors written and the pid file gone
+// 2026-10-23 incident), with podman away the whole time (the fake podman cannot connect, as when
+// the podman machine is stopped): started again after 5 s, then 10 s, one log line, no event;
+// SIGTERM ends it with exit 0, the cursors written and the pid file gone
 func TestRunIdleAndStop(t *testing.T) {
 	if testing.Short() {
 		t.Skip("10 s idle")
@@ -83,7 +85,8 @@ func TestRunIdleAndStop(t *testing.T) {
 	}
 	bin := build(t)
 	cmd := exec.Command(bin, "run")
-	_, cmd.Env = env(t, h)
+	f, e := env(t, h)
+	cmd.Env = e
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
@@ -137,6 +140,16 @@ func TestRunIdleAndStop(t *testing.T) {
 	if _, err := os.Stat(pidf); !os.IsNotExist(err) {
 		t.Error("pid file left")
 	}
+	// podman away: tried at 0 and 5 s (the next at 15 s), never connected, logged once
+	if n := f.PodmanStarts(); n < 1 || n > 3 {
+		t.Errorf("podman started %d times in ~11 s (backoff 5, 10, 30, 60 s)", n)
+	}
+	if n := strings.Count(stderr.String(), "podman away: "); n != 1 {
+		t.Errorf("%d podman away lines:\n%s", n, stderr.String())
+	}
+	if st, _ := os.ReadFile(filepath.Join(h, ".local/state/anfsd/podman.json")); !strings.Contains(string(st), `"state":"away"`) {
+		t.Errorf("podman.json %s", st)
+	}
 	c, _ := os.ReadFile(filepath.Join(h, ".local/state/anfsd/cursors.json"))
 	if !strings.Contains(string(c), "host/") {
 		t.Errorf("cursors %s", c)
@@ -167,5 +180,44 @@ func TestShipOnce(t *testing.T) {
 	errb.Reset()
 	if c := run([]string{"ship", "--once"}, &out, &errb); c != 1 || !strings.Contains(errb.String(), "ppm install core/nats") {
 		t.Fatalf("exit %d err %q", c, errb.String())
+	}
+}
+
+// ANFSD_PODMAN=off (anfsd.local.env): podman is never started, podman.json says off
+func TestPodmanOff(t *testing.T) {
+	srv := testnats.Start(t, testnats.Users{"anfsd": "pw"})
+	h := home(t, srv, "pw")
+	os.MkdirAll(filepath.Join(h, ".config/anfsd"), 0o755)
+	os.WriteFile(filepath.Join(h, ".config/anfsd/anfsd.local.env"), []byte("ANFSD_PODMAN=off\n"), 0o644)
+	bin := build(t)
+	cmd := exec.Command(bin, "run")
+	f, e := env(t, h)
+	cmd.Env = e
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	st := filepath.Join(h, ".local/state/anfsd/podman.json")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		b, _ := os.ReadFile(st)
+		if strings.Contains(string(b), `"state":"off"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			cmd.Process.Kill()
+			t.Fatalf("podman.json %s; stderr:\n%s", b, stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Wait()
+	if n := f.PodmanStarts(); n != 0 {
+		t.Errorf("podman started %d times", n)
+	}
+	if !strings.Contains(stderr.String(), "podman: off (ANFSD_PODMAN=off)") {
+		t.Errorf("log:\n%s", stderr.String())
 	}
 }
