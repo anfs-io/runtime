@@ -1,0 +1,17 @@
+# argv
+agy
+-p
+Fix it.\n\n---\nfooter
+--sandbox
+--add-dir
+/home/u/.local/share/anfs/sources
+--add-dir
+/notes/anfs
+--add-dir
+/spaces/anfs-dev
+--add-dir
+/tmp/anfs-work-501-3
+--model
+m1
+--print-timeout
+7200s

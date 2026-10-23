@@ -14,6 +14,7 @@ import (
 
 	"github.com/anfs-io/runtime/go/internal/bus"
 	"github.com/anfs-io/runtime/go/internal/cloudevent"
+	"github.com/anfs-io/runtime/go/internal/testfake"
 	"github.com/anfs-io/runtime/go/internal/testnats"
 )
 
@@ -53,8 +54,17 @@ func build(t *testing.T) string {
 	return bin
 }
 
-func env(h string) []string {
-	return []string{"HOME=" + h, "PATH=" + os.Getenv("PATH")}
+// the daemon's environment: a temp HOME and the fakes' PATH (a fake wsm, anfs and harnesses:
+// no real one can be found)
+func env(t *testing.T, h string) (*testfake.Fakes, []string) {
+	f := testfake.New(t)
+	e := []string{"HOME=" + h}
+	for _, kv := range f.Env() {
+		if !strings.HasPrefix(kv, "HOME=") {
+			e = append(e, kv)
+		}
+	}
+	return f, e
 }
 
 // anfsd run: ships the backlog, writes its pid; idle, it uses almost no CPU (no loop: the
@@ -73,7 +83,7 @@ func TestRunIdleAndStop(t *testing.T) {
 	}
 	bin := build(t)
 	cmd := exec.Command(bin, "run")
-	cmd.Env = env(h)
+	_, cmd.Env = env(t, h)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {

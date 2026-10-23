@@ -1,0 +1,37 @@
+#!/bin/sh
+# A fake agent CLI for anfsd's tests (linked as claude, opencode, pi and agy): it records how it
+# was started (argv NUL-separated, env, stdin, cwd, pid) in $FAKE_LOG/<name>.<pid>/, then does what
+# $FAKE_CTL/mode says: ok (a claude-like result line; with $FAKE_CTL/commit an empty commit in each
+# git repo below the cwd), exit N, sleep N, child (a child sleeping in its group, then wait),
+# fail-once (exit 1 the first time, then ok). Never a real harness.
+n=$(basename "$0")
+d="$FAKE_LOG/$n.$$"
+mkdir -p "$d"
+printf '%s\0' "$@" > "$d/argv"
+env > "$d/env"
+cat > "$d/stdin"
+pwd > "$d/cwd"
+echo $$ > "$d/pid"
+mode=ok
+[ ! -f "$FAKE_CTL/mode" ] || mode=$(cat "$FAKE_CTL/mode")
+ok() {
+  if [ -f "$FAKE_CTL/commit" ]; then
+    for g in */.git; do
+      [ -e "$g" ] || continue
+      git -C "${g%/.git}" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "fake fix"
+    done
+  fi
+  echo '{"type":"system","subtype":"init","session_id":"s1","model":"fake"}'
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"working on it"}]}}'
+  echo '{"type":"result","subtype":"success","num_turns":2,"total_cost_usd":0.01,"result":"The cause was X. Fixed with a test. Left for the person: review and merge."}'
+  exit 0
+}
+case "$mode" in
+  ok) ok ;;
+  exit\ *) echo "failing as told" >&2; exit "${mode#exit }" ;;
+  sleep\ *) sleep "${mode#sleep }"; ok ;;
+  child) sleep 300 & echo $! > "$d/child"; wait ;;
+  fail-once)
+    if [ ! -f "$FAKE_CTL/failed-once" ]; then : > "$FAKE_CTL/failed-once"; exit 1; fi
+    ok ;;
+esac

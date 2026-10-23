@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.15.1
 	github.com/nats-io/nats.go v1.54.0
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/time v0.16.0
 )
 

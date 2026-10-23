@@ -236,6 +236,76 @@ func (b *Bus) Publish(subject string, data []byte, id string) (jetstream.PubAckF
 	return b.js.PublishMsgAsync(m)
 }
 
+// Consume runs a durable pull consumer on ANFS until ctx is done: it is made (or its config
+// updated) once NATS is up and the stream exists, retried with the backoff while it cannot be, and
+// each message handed to h in turn (h acks). The client library keeps the subscription across a
+// reconnect; a consumer that goes away (deleted by hand) is made again.
+func (b *Bus) Consume(ctx context.Context, cfg jetstream.ConsumerConfig, h func(jetstream.Msg)) error {
+	attempt := 0
+	for {
+		if err := b.WaitConnected(ctx); err != nil {
+			return nil
+		}
+		cons, err := b.js.CreateOrUpdateConsumer(ctx, Stream, cfg)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			attempt++
+			if attempt == 1 || attempt%10 == 0 {
+				b.logf("consumer %s: %v (retrying: 1, 2, 5, 10, then every 30 s)", cfg.Durable, err)
+			}
+			t := time.NewTimer(Backoff(attempt))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil
+			case <-t.C:
+			}
+			continue
+		}
+		if attempt > 0 {
+			b.logf("consumer %s: ready", cfg.Durable)
+		}
+		attempt = 0
+		gone := make(chan struct{}, 1)
+		cc, err := cons.Consume(h, jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
+			if errors.Is(err, jetstream.ErrConsumerDeleted) || errors.Is(err, jetstream.ErrConsumerNotFound) {
+				select {
+				case gone <- struct{}{}:
+				default:
+				}
+			}
+		}))
+		if err != nil {
+			attempt++
+			t := time.NewTimer(Backoff(attempt))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil
+			case <-t.C:
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			cc.Drain()
+			<-cc.Closed()
+			return nil
+		case <-gone:
+			cc.Stop()
+			b.logf("consumer %s: gone, making it again", cfg.Durable)
+		}
+	}
+}
+
+// UpdateConsumer changes a durable consumer's config (the dispatcher's filters after a reload).
+func (b *Bus) UpdateConsumer(ctx context.Context, cfg jetstream.ConsumerConfig) error {
+	_, err := b.js.CreateOrUpdateConsumer(ctx, Stream, cfg)
+	return err
+}
+
 // JetStream is the context, for consumers (02b) and tests.
 func (b *Bus) JetStream() jetstream.JetStream { return b.js }
 

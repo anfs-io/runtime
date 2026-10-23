@@ -2,7 +2,9 @@
 # anfsd end to end: the real nats-server (the version core/nats pins) on a random port in a temp
 # dir, with the users core/nats renders, anfsd built from this tree, and a temp HOME holding a
 # spool of fixture lines. Every line is in the stream ANFS once; kill -9 anfsd, append, restart:
-# still once each. Skipped, saying so, when nats-server or the nats CLI is not on PATH.
+# still once each. A dispatch rule (02b) with the fake harness (internal/testfake: never a real
+# one) and a fake wsm and anfs on PATH: one report.filed line in the spool is a run, its
+# run.submitted, run.working and run.completed in the stream. Skipped, saying so, when nats-server or the nats CLI is not on PATH.
 # Run: bats go/test/e2e.bats </dev/null   (from the repo's root; CI puts the pinned binaries on PATH)
 
 bats_require_minimum_version 1.5.0
@@ -69,8 +71,9 @@ spool() {
   for (( i = from; i <= to; i++ )); do line "$scope" "$i" >> "$EV/$scope/2026-10.jsonl"; done
 }
 
+# anfsd with the system's PATH only: no wsm, anfs or harness of the person's is ever run
 start_anfsd() {
-  "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
+  PATH=/usr/bin:/bin "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
   ANFSD_PID=$!
 }
 
@@ -144,4 +147,52 @@ ids() {
   ANFSD_PID=""
   [ "$(cat "$HOME/.local/state/anfsd/cursors.json")" = "{\"host/2026-10.jsonl\":$(wc -c < "$EV/host/2026-10.jsonl" | tr -d ' ')}" ]
   [ ! -e "$HOME/.local/state/anfsd/anfsd.pid" ]
+}
+
+@test "dispatch: a report.filed line in the spool is a run, its run.* in the stream" {
+  local fakes="$BATS_TEST_DIRNAME/../internal/testfake/testdata" bin="$BATS_TEST_TMPDIR/bin" sp="$HOME/spaces/anfs-dev"
+  mkdir -p "$bin" "$sp/prompts" "$BATS_TEST_TMPDIR/flog" "$BATS_TEST_TMPDIR/fctl" "$BATS_TEST_TMPDIR/fwork"
+  ln -s "$fakes/fake-harness" "$bin/claude"
+  ln -s "$fakes/fake-anfs" "$bin/anfs"
+  printf '#!/bin/sh\nexec anfs work "$@"\n' > "$bin/anfs-work"
+  printf '#!/bin/sh\necho %s\n' "'[{\"space\":\"anfs-dev\",\"status\":\"ok\",\"dir\":\"$sp\",\"id\":\"abcde23456\"}]'" > "$bin/wsm"
+  chmod +x "$bin/anfs-work" "$bin/wsm"
+  cat > "$sp/space.yml" <<YML
+id: abcde23456
+agents:
+  maintainer: {harness: claude}
+dispatch:
+  - name: fix-core-report
+    on: {type: report.filed, data: {to: file, package: "core/*"}}
+    as: maintainer
+    job: {name: "fix-{{subject}}", repos: [core]}
+    prompt_file: prompts/report-filed.md
+YML
+  echo 'Fix {{subject}}.' > "$sp/prompts/report-filed.md"
+  : > "$BATS_TEST_TMPDIR/fctl/commit"
+  # the fake writes its record into FAKE_LOG; anfsd's PATH holds only the fakes and the system
+  FAKE_LOG="$BATS_TEST_TMPDIR/flog" FAKE_CTL="$BATS_TEST_TMPDIR/fctl" FAKE_WORK="$BATS_TEST_TMPDIR/fwork" \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 PATH="$bin:/usr/bin:/bin" \
+    "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
+  ANFSD_PID=$!
+  local i
+  for i in $(seq 100); do
+    nats consumer info ANFS anfsd-dispatch --json >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261023-9","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"package":"core/pcm","title":"t","to":"file"}}\n' \
+    99 "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
+  for i in $(seq 150); do
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.run.completed": 1'* ]] && break
+    sleep 0.2
+  done
+  run nats stream subjects ANFS --json
+  [[ "$output" == *'"anfs.abcde23456.run.submitted": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.abcde23456.run.working": 1'* ]]
+  [[ "$output" == *'"anfs.abcde23456.run.completed": 1'* ]]
+  # the fake harness ran in the job with its actor; the commit counted
+  grep -q '^ANFS_AS=anfs-dev/maintainer$' "$BATS_TEST_TMPDIR"/flog/claude.*/env
+  grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/flog/anfs.log"
+  run nats stream get ANFS --last-for anfs.abcde23456.run.completed --json
+  [[ "$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)" == *'"commits":"core:1"'* ]]
 }

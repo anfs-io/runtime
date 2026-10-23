@@ -1,0 +1,92 @@
+# argv
+claude
+-p
+--output-format
+stream-json
+--verbose
+--permission-mode
+dontAsk
+--settings
+/state/runs/r1/claude.json
+--add-dir
+/home/u/.local/share/anfs/sources
+--add-dir
+/notes/anfs
+--add-dir
+/spaces/anfs-dev
+--add-dir
+/tmp/anfs-work-501-3
+--model
+m1
+--max-budget-usd
+10
+--name
+fix-core-report:89abcdef
+--
+Fix it.\n\n---\nfooter
+# claude.json
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/u/.local/share/anfs/sources/**)",
+      "Read(//notes/anfs/**)",
+      "Read(//spaces/anfs-dev/**)",
+      "Read(//tmp/anfs-work-501-3/**)",
+      "Read(//work/fix-r-1/**)",
+      "Edit(//notes/anfs/**)",
+      "Write(//notes/anfs/**)",
+      "Edit(//tmp/anfs-work-501-3/**)",
+      "Write(//tmp/anfs-work-501-3/**)",
+      "Edit(//work/fix-r-1/**)",
+      "Write(//work/fix-r-1/**)",
+      "Bash"
+    ],
+    "defaultMode": "dontAsk",
+    "deny": [
+      "Bash(git push)",
+      "Bash(git push:*)",
+      "Bash(ppm install)",
+      "Bash(ppm install:*)",
+      "Bash(ppm remove)",
+      "Bash(ppm remove:*)",
+      "Bash(anfs install)",
+      "Bash(anfs install:*)",
+      "Bash(anfs remove)",
+      "Bash(anfs remove:*)",
+      "Bash(anfs implode)",
+      "Bash(anfs implode:*)",
+      "Bash(anfs src update)",
+      "Bash(anfs src update:*)",
+      "Bash(wsm install)",
+      "Bash(wsm install:*)",
+      "Bash(wsm remove)",
+      "Bash(wsm remove:*)",
+      "Bash(anfs report close)",
+      "Bash(anfs report close:*)",
+      "Bash(gh)",
+      "Bash(gh:*)",
+      "Bash(sudo)",
+      "Bash(sudo:*)",
+      "Bash(launchctl)",
+      "Bash(launchctl:*)",
+      "Bash(systemctl)",
+      "Bash(systemctl:*)",
+      "Bash(anfs bus)",
+      "Bash(anfs bus:*)",
+      "Bash(anfs agents)",
+      "Bash(anfs agents:*)"
+    ]
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "/notes/anfs",
+        "/tmp/anfs-work-501-3",
+        "/work/fix-r-1"
+      ]
+    }
+  }
+}

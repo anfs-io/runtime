@@ -24,7 +24,8 @@ import (
 type Paths struct {
 	Home      string
 	Config    string // $XDG_CONFIG_HOME/anfsd
-	State     string // $XDG_STATE_HOME/anfsd: cursors.json, anfsd.pid, anfsd.log (macOS)
+	State     string // $XDG_STATE_HOME/anfsd: cursors.json, anfsd.pid, anfsd.log (macOS), runs/
+	Runs      string // $XDG_STATE_HOME/anfsd/runs: one directory per run (02b)
 	Events    string // $XDG_STATE_HOME/anfs/events: the spool (lib/anfs/events.sh writes it)
 	NatsState string // $XDG_STATE_HOME/nats: port, users/anfsd (core/nats writes them)
 }
@@ -36,6 +37,7 @@ type Settings struct {
 	DupWindow      time.Duration // ANFSD_DUP_WINDOW (24h)
 	ShipRate       float64       // ANFSD_SHIP_RATE (100 events/s per scope)
 	ShipBurst      int           // ANFSD_SHIP_BURST (1000)
+	MaxRuns        int           // ANFSD_MAX_RUNS (2): runs at once on this host
 }
 
 // Nats is how anfsd connects: the URL from core/nats's port file, the anfsd user and its password.
@@ -60,6 +62,7 @@ func Defaults() Settings {
 		DupWindow:      24 * time.Hour,
 		ShipRate:       100,
 		ShipBurst:      1000,
+		MaxRuns:        2,
 	}
 }
 
@@ -90,6 +93,7 @@ func PathsFrom(getenv func(string) string) (Paths, error) {
 	if v := getenv("ANFSD_STATE_HOME"); v != "" {
 		p.State = v
 	}
+	p.Runs = filepath.Join(p.State, "runs")
 	return p, nil
 }
 
@@ -139,7 +143,7 @@ func ReadSettings(p Paths, lookup func(string) (string, bool)) (map[string]strin
 }
 
 var settingNames = []string{
-	"ANFSD_STREAM_MAX_AGE", "ANFSD_STREAM_MAX_BYTES", "ANFSD_DUP_WINDOW", "ANFSD_SHIP_RATE", "ANFSD_SHIP_BURST",
+	"ANFSD_STREAM_MAX_AGE", "ANFSD_STREAM_MAX_BYTES", "ANFSD_DUP_WINDOW", "ANFSD_SHIP_RATE", "ANFSD_SHIP_BURST", "ANFSD_MAX_RUNS",
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -216,7 +220,29 @@ func ParseSettings(vals map[string]string) (Settings, error) {
 			return s, fmt.Errorf("ANFSD_SHIP_BURST=%s: a positive whole number", v)
 		}
 	}
+	if v := vals["ANFSD_MAX_RUNS"]; v != "" {
+		if s.MaxRuns, err = strconv.Atoi(v); err != nil || s.MaxRuns < 1 {
+			return s, fmt.Errorf("ANFSD_MAX_RUNS=%s: a positive whole number", v)
+		}
+	}
 	return s, nil
+}
+
+// LoadLocal is Load without NATS: the paths and the settings (anfsd rules, match).
+func LoadLocal() (*Config, error) {
+	p, err := PathsFrom(os.Getenv)
+	if err != nil {
+		return nil, err
+	}
+	vals, err := ReadSettings(p, os.LookupEnv)
+	if err != nil {
+		return nil, err
+	}
+	s, err := ParseSettings(vals)
+	if err != nil {
+		return nil, err
+	}
+	return &Config{Paths: p, Settings: s}, nil
 }
 
 var daysRE = regexp.MustCompile(`^([0-9]+)d$`)

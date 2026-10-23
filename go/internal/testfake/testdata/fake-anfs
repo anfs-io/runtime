@@ -1,0 +1,33 @@
+#!/bin/sh
+# A fake anfs for anfsd's tests: anfs work path|new|env over $FAKE_WORK/<job> (new makes each repo
+# a git repo on main with one commit, then on the job's branch), and anfs report __sink (the event
+# on stdin kept in $FAKE_LOG/sink.<pid>; failing while $FAKE_CTL/sink-fail says so). Every call is
+# a line in $FAKE_LOG/anfs.log.
+printf '%s\n' "$*" >> "$FAKE_LOG/anfs.log"
+case "$1 $2" in
+  "work path")
+    [ -d "$FAKE_WORK/$3" ] || { echo "anfs work: no job $3" >&2; exit 1; }
+    echo "$FAKE_WORK/$3" ;;
+  "work new")
+    j=$3; shift 3
+    [ ! -e "$FAKE_WORK/$j" ] || { echo "anfs work: job '$j' exists" >&2; exit 73; }
+    for r in "$@"; do
+      git init -q -b main "$FAKE_WORK/$j/$r" &&
+        git -C "$FAKE_WORK/$j/$r" -c user.name=t -c user.email=t@t commit -q --allow-empty -m first &&
+        git -C "$FAKE_WORK/$j/$r" checkout -q -b "$j" || exit 1
+    done ;;
+  "work env")
+    [ -d "$FAKE_WORK/$3" ] || { echo "anfs work: no job $3" >&2; exit 1; }
+    echo "unset ANFS_WORK ANFS_WORK_SAID"
+    echo "export ANFS_WORK_JOB=$3"
+    echo "export ANFS_WORK_NUMBER=7"
+    echo "export TMPDIR=$FAKE_WORK/$3/.tmp"
+    echo 'export ROUNDTRIP_SRC_ROOT=/a\ path' ;;
+  "report __sink")
+    cat > "$FAKE_LOG/sink.$$"
+    if [ -f "$FAKE_CTL/sink-fail" ]; then
+      n=$(ls "$FAKE_LOG" | grep -c '^sink\.')
+      [ "$n" -gt "$(cat "$FAKE_CTL/sink-fail")" ] || { echo "render failed (as told)" >&2; exit 1; }
+    fi ;;
+  *) echo "fake anfs: $*" >&2; exit 64 ;;
+esac

@@ -27,7 +27,7 @@ func TestPathsAndSettings(t *testing.T) {
 	// shipped file, then the local one wins, then the environment
 	os.MkdirAll(p.Config, 0o755)
 	os.WriteFile(filepath.Join(p.Config, "anfsd.env"), []byte("# settings\n#ANFSD_SHIP_RATE=100\nANFSD_STREAM_MAX_AGE=30d\nexport ANFSD_SHIP_BURST='50'\nANFSD_DUP_WINDOW=2h\n"), 0o644)
-	os.WriteFile(filepath.Join(p.Config, "anfsd.local.env"), []byte("ANFSD_DUP_WINDOW=\"3h\"\nANFSD_STREAM_MAX_BYTES=512MiB\n"), 0o644)
+	os.WriteFile(filepath.Join(p.Config, "anfsd.local.env"), []byte("ANFSD_DUP_WINDOW=\"3h\"\nANFSD_STREAM_MAX_BYTES=512MiB\nANFSD_MAX_RUNS=3\n"), 0o644)
 	vals, err := ReadSettings(p, func(k string) (string, bool) {
 		if k == "ANFSD_SHIP_RATE" {
 			return "7", true
@@ -41,11 +41,11 @@ func TestPathsAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Settings{StreamMaxAge: 30 * 24 * time.Hour, StreamMaxBytes: 512 << 20, DupWindow: 3 * time.Hour, ShipRate: 7, ShipBurst: 50}
+	want := Settings{StreamMaxAge: 30 * 24 * time.Hour, StreamMaxBytes: 512 << 20, DupWindow: 3 * time.Hour, ShipRate: 7, ShipBurst: 50, MaxRuns: 3}
 	if s != want {
 		t.Errorf("settings %+v, want %+v", s, want)
 	}
-	if d := Defaults(); d.StreamMaxAge != 90*24*time.Hour || d.StreamMaxBytes != 1<<30 || d.DupWindow != 24*time.Hour || d.ShipRate != 100 || d.ShipBurst != 1000 {
+	if d := Defaults(); d.StreamMaxAge != 90*24*time.Hour || d.StreamMaxBytes != 1<<30 || d.DupWindow != 24*time.Hour || d.ShipRate != 100 || d.ShipBurst != 1000 || d.MaxRuns != 2 {
 		t.Errorf("defaults %+v", d)
 	}
 	if _, err := ParseSettings(map[string]string{"ANFSD_STREAM_MAX_BYTES": "lots"}); err == nil {
@@ -53,6 +53,12 @@ func TestPathsAndSettings(t *testing.T) {
 	}
 	if _, err := ParseSettings(map[string]string{"ANFSD_SHIP_RATE": "0"}); err == nil {
 		t.Error("a zero rate parsed")
+	}
+	if _, err := ParseSettings(map[string]string{"ANFSD_MAX_RUNS": "0"}); err == nil {
+		t.Error("no runs at all parsed")
+	}
+	if p.Runs != filepath.Join(home, ".local/state/anfsd/runs") {
+		t.Errorf("runs %s", p.Runs)
 	}
 }
 
