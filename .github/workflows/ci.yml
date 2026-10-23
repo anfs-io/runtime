@@ -1,0 +1,49 @@
+# Every push and pull request: format, vet, the Go tests with the race detector (an embedded
+# nats-server), and the end-to-end bats against the nats-server and nats CLI core/nats pins
+# (fetched here and checked against the same sha256s).
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: go
+    env:
+      NATS_SERVER_VERSION: v2.15.1
+      NATS_SERVER_SHA256: bf5edc7b1ce98e885c368cb43a886eb148dc5d0551d99f3cf6141fb5e1954c70
+      NATS_CLI_VERSION: v0.5.0
+      NATS_CLI_SHA256: d9fc93e9e9ab0310deff7e719a8a0da6f9d66f26d473f039aaee70155507aecc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - name: the pinned nats-server and nats CLI
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/nats-bin"; mkdir -p "$bin"; cd "$RUNNER_TEMP"
+          s="nats-server-${NATS_SERVER_VERSION}-linux-amd64"
+          curl -fsSLO "https://github.com/nats-io/nats-server/releases/download/${NATS_SERVER_VERSION}/$s.tar.gz"
+          echo "${NATS_SERVER_SHA256}  $s.tar.gz" | sha256sum -c -
+          tar -xzf "$s.tar.gz" && mv "$s/nats-server" "$bin/"
+          c="nats-${NATS_CLI_VERSION#v}-linux-amd64"
+          curl -fsSLO "https://github.com/nats-io/natscli/releases/download/${NATS_CLI_VERSION}/$c.zip"
+          echo "${NATS_CLI_SHA256}  $c.zip" | sha256sum -c -
+          unzip -q "$c.zip" && mv "$c/nats" "$bin/"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: bats
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bats
+      - name: e2e
+        run: bats test/e2e.bats </dev/null

@@ -1,0 +1,42 @@
+# A v* tag: anfsd for darwin and linux on arm64 and amd64 (static, -trimpath, the tag stamped as
+# its version), anfsd-<tag>-<os>-<arch>.tar.gz each (the binary at the archive's root) and their
+# SHA256SUMS, attached to a GitHub release of the tag. core/anfsd's pins.yml pins these sums
+# (packages/anfsd/tests/pins --print in core prints them).
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: test
+        working-directory: go
+        run: go test ./...
+      - name: build
+        working-directory: go
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os="${target%/*}" arch="${target#*/}" d="$RUNNER_TEMP/$os-$arch"
+            mkdir -p "$d"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$TAG" -o "$d/anfsd" ./cmd/anfsd
+            tar -C "$d" -czf "../dist/anfsd-$TAG-$os-$arch.tar.gz" anfsd
+          done
+          cd ../dist && sha256sum anfsd-*.tar.gz > SHA256SUMS && cat SHA256SUMS
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --title "anfsd $TAG" --notes "anfsd $TAG: see SHA256SUMS; core/anfsd pins these."
