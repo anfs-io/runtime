@@ -2,8 +2,10 @@
 // the tools, to NATS JetStream's stream ANFS, each line as it is, exactly once per event id), the
 // dispatcher (the dispatch rules in the installed spaces' space.yml, on the durable consumer
 // anfsd-dispatch), the supervisor (each run a child in its own session, recorded in
-// $XDG_STATE_HOME/anfsd/runs), and the report sink (anfsd-sink-report: anfs report __sink renders
-// the report records into the report file). It is not a broker: NATS is (core/nats).
+// $XDG_STATE_HOME/anfsd/runs), the report sink (anfsd-sink-report: anfs report __sink renders
+// the report records into the report file), and the recorder (anfsd-recorder: what a layer
+// published to NATS directly goes into <scope>/<YYYY-MM>.bus.jsonl beside the spool). It is not a
+// broker: NATS is (core/nats).
 //
 //	anfsd run          all of it until SIGTERM (the launchd agent / systemd unit core/anfsd writes);
 //	                   SIGHUP (anfs bus reload) reads the rules again
@@ -34,6 +36,7 @@ import (
 	"github.com/anfs-io/runtime/go/internal/config"
 	"github.com/anfs-io/runtime/go/internal/dispatch"
 	"github.com/anfs-io/runtime/go/internal/podman"
+	"github.com/anfs-io/runtime/go/internal/recorder"
 	"github.com/anfs-io/runtime/go/internal/shipper"
 	"github.com/anfs-io/runtime/go/internal/sink"
 	"github.com/anfs-io/runtime/go/internal/space"
@@ -44,11 +47,11 @@ import (
 // version is stamped by the release build (-ldflags "-X main.version=v0.1.0")
 var version = "dev"
 
-const usage = `anfsd: the anfs daemon (the event log to NATS JetStream; dispatch rules; their runs;
-podman's container and pod events)
+const usage = `anfsd: the anfs daemon (the event log to NATS JetStream and what is published there
+directly back into it; dispatch rules; their runs; podman's container and pod events)
 
 Usage:
-  anfsd run          ship, dispatch, supervise and follow podman events until SIGTERM
+  anfsd run          ship, record, dispatch, supervise and follow podman events until SIGTERM
                      (run by launchd or systemd: anfs bus start); SIGHUP reads the
                      rules again
   anfsd ship --once  ship what is pending, then exit
@@ -191,9 +194,10 @@ func daemon(logf func(string, ...any)) int {
 	d.Reload(ctx)
 	d.Redispatch()
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); d.Run(ctx, b) }()
 	go func() { defer wg.Done(); (&sink.Sink{Logf: logf}).Run(ctx, b) }()
+	go func() { defer wg.Done(); (&recorder.Recorder{Events: cfg.Paths.Events, Logf: logf}).Run(ctx, b) }()
 	pw := &podman.Watcher{Events: cfg.Paths.Events, StateFile: filepath.Join(cfg.Paths.State, "podman.json"), Logf: logf}
 	if cfg.Settings.Podman {
 		wg.Add(1)

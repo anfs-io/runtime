@@ -1,8 +1,8 @@
 // Package bus is anfsd's connection to NATS: connect as the anfsd user with a backoff of 1, 2, 5,
 // 10 and 30 s (then every 30 s) and never a tight loop, one log line per change of state, make
 // sure of the stream ANFS (subjects anfs.>, file storage, limits retention, discard old, the age,
-// size and duplicate window from anfsd.env), and publish with Nats-Msg-Id so the stream drops a
-// line sent twice.
+// size and duplicate window from anfsd.env, the max message size of the events profile), and
+// publish with Nats-Msg-Id so the stream drops a line sent twice.
 package bus
 
 import (
@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anfs-io/runtime/go/internal/cloudevent"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -24,6 +25,17 @@ const Subjects = "anfs.>"
 
 // MaxPending is the most publishes awaiting their acks.
 const MaxPending = 256
+
+// HeaderRoom is the bytes the two headers every publish carries take in a message: NATS counts
+// headers in a stream's max_msg_size (nats-server's stream.go: len(hdr) + len(msg)), so the
+// stream's limit is the body's (SPEC.md §1.1: at most 4095 bytes, the line without its newline)
+// plus these: "NATS/1.0\r\n", "Nats-Msg-Id: <36>\r\n", "Content-Type:
+// application/cloudevents+json\r\n" and the blank line. A publisher that sends fewer headers can
+// get a larger body past the stream; the recorder checks the body.
+const HeaderRoom = len("NATS/1.0\r\n") + len("Nats-Msg-Id: \r\n") + 36 + len("Content-Type: application/cloudevents+json\r\n") + len("\r\n")
+
+// MaxMsgSize is the stream's max_msg_size: a body over 4095 bytes with the two headers is refused.
+const MaxMsgSize = cloudevent.Max - 1 + HeaderRoom
 
 // ErrForeignStream is another stream already holding anfs.>.
 var ErrForeignStream = errors.New("another stream holds anfs.>")
@@ -206,6 +218,7 @@ func (b *Bus) EnsureStream(ctx context.Context, s StreamSettings) error {
 		MaxAge:     s.MaxAge,
 		MaxBytes:   s.MaxBytes,
 		Duplicates: s.DupWindow,
+		MaxMsgSize: int32(MaxMsgSize),
 		Replicas:   max(s.Replicas, 1),
 	}
 	if _, err := b.js.CreateOrUpdateStream(ctx, cfg); err != nil {

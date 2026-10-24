@@ -1,8 +1,11 @@
 package bus
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +63,7 @@ func TestEnsureStream(t *testing.T) {
 	c := info.Config
 	if c.Name != "ANFS" || len(c.Subjects) != 1 || c.Subjects[0] != "anfs.>" || c.Storage != jetstream.FileStorage ||
 		c.Retention != jetstream.LimitsPolicy || c.Discard != jetstream.DiscardOld || c.MaxAge != time.Hour ||
-		c.MaxBytes != 1<<20 || c.Duplicates != 10*time.Minute {
+		c.MaxBytes != 1<<20 || c.Duplicates != 10*time.Minute || c.MaxMsgSize != 4095+107 {
 		t.Fatalf("config %+v", c)
 	}
 	set.MaxAge, set.MaxBytes = 2*time.Hour, 2<<20
@@ -158,5 +161,36 @@ func TestAuth(t *testing.T) {
 	defer cancel()
 	if b.WaitConnected(short) == nil {
 		t.Fatal("connected with a wrong password")
+	}
+}
+
+// The stream refuses a body over 4095 bytes (a line of 4097 with its newline) published with the
+// two headers every publish carries, and takes one of 4095: NATS counts the headers
+func TestMaxMsgSize(t *testing.T) {
+	s := testnats.Start(t, testnats.Users{"anfsd": "pw"})
+	b := connect(t, s, "anfsd", "pw")
+	if err := b.EnsureStream(ctx(t), StreamSettings{MaxAge: time.Hour, MaxBytes: 1 << 20, DupWindow: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		n  int
+		ok bool
+	}{{4095, true}, {4096, false}} {
+		f, err := b.Publish("anfs.host.anfs.x.y", bytes.Repeat([]byte("x"), c.n), fmt.Sprintf("01a16d78-ab3d-7aed-a913-%012d", c.n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-f.Ok():
+			if !c.ok {
+				t.Errorf("%d bytes stored", c.n)
+			}
+		case err := <-f.Err():
+			if c.ok || !strings.Contains(err.Error(), "message size exceeds maximum") {
+				t.Errorf("%d bytes: %v", c.n, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no ack")
+		}
 	}
 }

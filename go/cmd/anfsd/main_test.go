@@ -14,6 +14,7 @@ import (
 
 	"github.com/anfs-io/runtime/go/internal/bus"
 	"github.com/anfs-io/runtime/go/internal/cloudevent"
+	"github.com/anfs-io/runtime/go/internal/recorder"
 	"github.com/anfs-io/runtime/go/internal/testfake"
 	"github.com/anfs-io/runtime/go/internal/testnats"
 )
@@ -131,6 +132,17 @@ func TestRunIdleAndStop(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	time.Sleep(10 * time.Second)
+	// the recorder read all 11 and found each in the spool: nothing recorded
+	rc, err := b.JetStream().Consumer(context.Background(), bus.Stream, recorder.Consumer)
+	if err != nil {
+		t.Fatalf("no recorder: %v\n%s", err, stderr.String())
+	}
+	if ci, _ := rc.Info(context.Background()); ci == nil || ci.AckFloor.Stream != 11 || ci.NumAckPending != 0 {
+		t.Errorf("recorder %+v", ci)
+	}
+	if m, _ := filepath.Glob(filepath.Join(events, "*", "*.bus.jsonl")); len(m) != 0 {
+		t.Errorf("recorded the spool's lines: %v", m)
+	}
 	cmd.Process.Signal(syscall.SIGTERM)
 	err = cmd.Wait()
 	if err != nil {
