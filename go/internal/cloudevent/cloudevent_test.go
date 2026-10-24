@@ -169,3 +169,76 @@ func TestAppend(t *testing.T) {
 		t.Errorf("%d lines", n)
 	}
 }
+
+// anfsd's stamp on a line a run wrote (02d): byte for byte
+func TestStampLine(t *testing.T) {
+	st := Stamp{Actor: "claude:89abcdef", ActorSpace: "abcde23456", ActorRole: "maintainer", ActorRun: "01a169de-e9bb-7000-8000-000089abcdef"}
+	// honest: anfs_emit with ANFS_ACTOR and ANFS_AS
+	honest := `{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-000000000001","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","subject":"r-1","time":"2026-10-23T17:46:18.939Z","datacontenttype":"application/json","actor":"claude:89abcdef","actorspace":"abcde23456","actorrole":"maintainer","spacepath":"anfs-dev","anfsv":1,"data":{"to":"file","why":"a \"fix\""}}` + "\n"
+	got, ev, err := StampLine([]byte(honest), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-000000000001","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","subject":"r-1","time":"2026-10-23T17:46:18.939Z","datacontenttype":"application/json","actor":"claude:89abcdef","actorspace":"abcde23456","actorrole":"maintainer","actorrun":"01a169de-e9bb-7000-8000-000089abcdef","spacepath":"anfs-dev","anfsv":1,"data":{"to":"file","why":"a \"fix\""}}` + "\n"
+	if string(got) != want {
+		t.Errorf("honest:\n%s\nwant:\n%s", got, want)
+	}
+	if ev.ActorRun != st.ActorRun || ev.ActorClaimed != "" || ev.ID != "01a169de-e9bb-7000-8000-000000000001" {
+		t.Errorf("%+v", ev)
+	}
+	// forged: another actor and the person's role, an actorrun and actorclaimed of its own, an
+	// unknown attribute and data first
+	forged := `{"data":{"x":"y"},"actorclaimed":"nobody","specversion":"1.0","id":"01a169de-e9bb-7000-8000-000000000002","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","time":"2026-10-23T17:46:18.940Z","actor":"shell:person","actorspace":"tkj76y3nfx","actorrole":"person","actorrun":"forged","extra":{"a": 1},"anfsv":1}`
+	got, ev, err = StampLine([]byte(forged), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-000000000002","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","time":"2026-10-23T17:46:18.940Z","actor":"claude:89abcdef","actorspace":"abcde23456","actorrole":"maintainer","actorrun":"01a169de-e9bb-7000-8000-000089abcdef","actorclaimed":"shell:person as tkj76y3nfx/person","anfsv":1,"extra":{"a": 1},"data":{"x":"y"}}` + "\n"
+	if string(got) != want {
+		t.Errorf("forged:\n%s\nwant:\n%s", got, want)
+	}
+	if ev.ActorClaimed != "shell:person as tkj76y3nfx/person" || ev.Actor != st.Actor {
+		t.Errorf("%+v", ev)
+	}
+	// another actor without a role: the claim is the actor alone
+	other := strings.Replace(honest, `"actor":"claude:89abcdef","actorspace":"abcde23456","actorrole":"maintainer"`, `"actor":"claude:2e9431a0"`, 1)
+	if _, ev, _ := StampLine([]byte(other), st); ev.ActorClaimed != "claude:2e9431a0" {
+		t.Errorf("claim %q", ev.ActorClaimed)
+	}
+	// over 4096 once stamped: refused; an invalid line and a doubled key too
+	big := strings.Replace(honest, `"to":"file"`, `"to":"`+strings.Repeat("x", Max-len(honest)-2)+`"`, 1)
+	if _, err := Parse([]byte(big)); err != nil {
+		t.Fatalf("the big line should be valid unstamped: %v", err)
+	}
+	if _, _, err := StampLine([]byte(big), st); err == nil || !strings.Contains(err.Error(), "once stamped") {
+		t.Errorf("big: %v", err)
+	}
+	if _, _, err := StampLine([]byte("not json"), st); err == nil {
+		t.Error("not json stamped")
+	}
+	dup := strings.Replace(honest, `"anfsv":1`, `"anfsv":1,"subject":"r-2"`, 1)
+	if _, _, err := StampLine([]byte(dup), st); err == nil {
+		t.Error("a doubled key stamped")
+	}
+}
+
+func TestAppendLine(t *testing.T) {
+	dir := t.TempDir()
+	l := []byte(`{"a":1}`)
+	if err := AppendLine(dir, "abcde23456", "2026-10", l); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendLine(dir, "host", "2026-10", append(l, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"abcde23456/2026-10.jsonl", "host/2026-10.jsonl"} {
+		if b, _ := os.ReadFile(filepath.Join(dir, f)); string(b) != "{\"a\":1}\n" {
+			t.Errorf("%s: %q", f, b)
+		}
+	}
+	for _, bad := range [][2]string{{"../x", "2026-10"}, {"host", "../../x"}} {
+		if err := AppendLine(dir, bad[0], bad[1], l); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}

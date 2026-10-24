@@ -2,6 +2,7 @@ package supervise
 
 import (
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -84,4 +85,16 @@ func getEnv(env []string, k string) string {
 		}
 	}
 	return ""
+}
+
+// Passed are the names of env (anfsd's environment) a run of the harness gets, sorted (anfsd
+// match shows them: no values)
+func Passed(env []string, harness string) []string {
+	var out []string
+	for _, kv := range runEnv(env, harness) {
+		k, _, _ := strings.Cut(kv, "=")
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

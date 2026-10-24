@@ -11,7 +11,7 @@ import (
 // own docs call bash's path checks advisory: partial.
 func opencode(s Spec) (Cmd, error) {
 	ext := map[string]string{"*": "deny"}
-	for _, p := range uniq(append(append([]string{}, s.Read...), s.Write...)) {
+	for _, p := range uniq(append(append([]string{s.Spool}, s.Read...), s.Write...)) {
 		ext[strings.TrimSuffix(p, "/")+"/**"] = "allow"
 	}
 	bash := map[string]string{"*": "allow"}

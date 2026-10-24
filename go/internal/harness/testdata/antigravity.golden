@@ -10,6 +10,8 @@ Fix it.\n\n---\nfooter
 --add-dir
 /spaces/anfs-dev
 --add-dir
+/state/runs/r1/events
+--add-dir
 /tmp/anfs-work-501-3
 --model
 m1

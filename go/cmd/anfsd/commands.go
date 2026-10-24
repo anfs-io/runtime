@@ -203,7 +203,8 @@ type matchRow struct {
 	Cwd     string   `json:"cwd"`
 	Harness string   `json:"harness"`
 	Argv    []string `json:"argv"`
-	Env     []string `json:"env"`
+	Env     []string `json:"env"`    // what anfsd sets
+	Passed  []string `json:"passed"` // the names of its own environment that pass (the allow-list)
 	Prompt  string   `json:"prompt"`
 }
 
@@ -301,7 +302,7 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	rows := []matchRow{}
 	for _, s := range spaces {
 		for _, r := range s.Rules {
-			row := matchRow{Rule: r.Name, Status: r.Status, Space: s.Path, Harness: r.Harness, Repos: []string{}, Argv: []string{}, Env: []string{}}
+			row := matchRow{Rule: r.Name, Status: r.Status, Space: s.Path, Harness: r.Harness, Repos: []string{}, Argv: []string{}, Env: []string{}, Passed: []string{}}
 			if r.Status == space.StatusInvalid {
 				row.Result, row.Why = "invalid", r.Reason
 				rows = append(rows, row)
@@ -346,7 +347,8 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if row.Job != "" {
 			job = "anfs work new " + row.Job + " " + strings.Join(row.Repos, " ")
 		}
-		fmt.Fprintf(stdout, "  job:     %s\n  cwd:     %s\n  env:     %s\n  command: %s\n", job, row.Cwd, strings.Join(row.Env, " "), shellJoin(row.Argv))
+		fmt.Fprintf(stdout, "  job:     %s\n  cwd:     %s\n  env:     %s\n  passes:  %s (of anfsd's environment; nothing else)\n  command: %s\n",
+			job, row.Cwd, strings.Join(row.Env, " "), strings.Join(row.Passed, " "), shellJoin(row.Argv))
 	}
 	return 0
 }
@@ -374,6 +376,7 @@ func fillPlan(row *matchRow, dec dispatch.Decision, line []byte) {
 	read := append([]string{r.SpaceDir}, r.Read...)
 	spec := harness.Spec{Harness: r.Harness, Model: r.Model, BudgetUSD: r.BudgetUSD, Args: r.Args,
 		Name: r.Rule + ":" + r.Last8(), Cwd: cwd, RunDir: "<run dir>", Timeout: r.TimeoutDur(), Write: write, Read: read,
+		Spool:  "<run dir>/events",
 		Prompt: dec.Prompt + supervise.Footer(r, cwd, line, write, read)}
 	cmd, err := harness.Build(spec)
 	if err != nil {
@@ -387,10 +390,13 @@ func fillPlan(row *matchRow, dec dispatch.Decision, line []byte) {
 		}
 	}
 	row.Argv = argv
-	row.Env = append(cmd.Env[:0:0], "ANFS_ACTOR="+r.Harness+":"+r.Last8(), "ANFS_AS="+r.Address, "ANFS_RUN="+r.ID, "ANFS_EVENT=<run dir>/event.json")
+	row.Env = append(cmd.Env[:0:0], "ANFS_ACTOR="+r.Harness+":"+r.Last8(), "ANFS_AS="+r.Address, "ANFS_RUN="+r.ID,
+		"ANFS_EVENT=<run dir>/event.json", "ANFS_EVENTS_SPOOL=<run dir>/events")
 	for _, e := range cmd.Env {
 		row.Env = append(row.Env, firstN(e, 60))
 	}
+	row.Env = append(row.Env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_*=credential.helper (empty: no helper)")
+	row.Passed = supervise.Passed(nil, r.Harness)
 }
 
 func firstN(s string, n int) string {

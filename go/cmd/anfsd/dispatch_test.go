@@ -118,10 +118,16 @@ func TestMatchCommand(t *testing.T) {
 		`-- 'Fix r-20261023-9: It broke. (+ anfsd'\''s footer)'`,
 		"anfs-dev/off (disabled): disabled: would submit, but the rule has enabled: false",
 		"anfs-dev/loop (invalid): invalid: ",
+		"ANFS_EVENTS_SPOOL=<run dir>/events",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("no %q in:\n%s", want, s)
 		}
+	}
+	// the names of anfsd's environment that pass: the allow-list, never the fakes' or a token
+	if i := strings.Index(s, "passes:  "); i < 0 || strings.Contains(s[i:i+strings.Index(s[i:], "\n")], "FAKE_") ||
+		!strings.Contains(s[i:i+strings.Index(s[i:], "\n")], " PATH ") {
+		t.Errorf("passes:\n%s", s)
 	}
 	// nothing written, nothing started
 	if _, err := os.Stat(filepath.Join(f.Home, ".local/state/anfsd/runs")); !os.IsNotExist(err) {

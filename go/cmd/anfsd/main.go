@@ -170,6 +170,8 @@ func daemon(logf func(string, ...any)) int {
 		Events:  cfg.Paths.Events,
 		MaxRuns: cfg.Settings.MaxRuns,
 		Logf:    logf,
+
+		RunEventsMax: cfg.Settings.RunEventsMax,
 	}
 	if err := sup.Start(ctx); err != nil {
 		logf("runs: %v", err)

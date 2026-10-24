@@ -11,7 +11,8 @@ there. The bash side (the packages that install and run anfsd, `anfs bus`) is co
 go/go.mod                    module github.com/anfs-io/runtime/go
 go/cmd/anfsd                 run | ship --once | rules | match | render | version | help
 go/internal/config           anfsd.env (core's settings-file rules), the XDG paths, NATS's port and password
-go/internal/cloudevent       the profile (anfsv 1): Parse validates a line; Line/Append write one
+go/internal/cloudevent       the profile (anfsv 1): Parse validates a line; Line/Append write one;
+                             StampLine (a run's line with its identity), AppendLine
 go/internal/spool            the month files, complete lines past each cursor, cursors.json; Watch (fsnotify + 30 s)
 go/internal/bus              connect (backoff 1/2/5/10/30 s), ensure stream ANFS, publish with Nats-Msg-Id
 go/internal/shipper          spool -> bus: batches of 256, a token bucket per scope, cursors after the acked prefix
@@ -21,7 +22,8 @@ go/internal/dispatch         the consumer anfsd-dispatch: rules loaded, events m
                              rate, queue, loop), one run per rule and event id; Decide (anfsd match)
 go/internal/supervise        the runs: records (runs/<id>/run.json), the queue, slots per role and host,
                              start (anfs work new/env, setsid, a wrapper that keeps the exit status),
-                             timeout, cancel marker, adoption after a restart, run.* events
+                             timeout, cancel marker, adoption after a restart, run.* events; the
+                             run's environment (env.go: the allow-list); its spool (ingest.go)
 go/internal/harness          one file per harness: claude, opencode, pi, antigravity (argv, env, files),
                              the summary of a run's output, the text of its stream
 go/internal/sink             the consumer anfsd-sink-report: anfs report __sink per report.* event
@@ -62,6 +64,10 @@ go/test/e2e.bats             the real nats-server and the built anfsd in a temp 
   the system PATH). No test starts or stops a container or a podman machine.
 - **Podman away is not a loop**: the child is started again only after 5, 10, 30, then 60 s; a
   connection up a minute resets that; `cmd/anfsd`'s idle test runs with podman away throughout.
+- **A run writes no shared state** (02d): its events go into its own spool and anfsd stamps them
+  into the log (`supervise/ingest.go`, `cloudevent.StampLine`); its environment is the allow-list
+  in `supervise/env.go` (a new name passes only by a decision in a plan). `testfake`'s harness and
+  anfs find their directories beside `HOME`, since `FAKE_*` do not pass the list either.
 - **No spinning on a failing harness**: a run is never restarted but for `retries:` (at most 2,
   30 s then 2 min apart), and `rate:` caps starts per rule; the adopted runs' 10 s check runs only
   while one is adopted.

@@ -47,6 +47,9 @@ type Spec struct {
 	Write     []string      // absolute: the job, its TMPDIR, access: write paths
 	Read      []string      // absolute: the space's directory, access: read paths
 	Args      []string      // the rule's args:
+	// Spool is the run's own events directory ($ANFS_EVENTS_SPOOL, 02d): writable by its shell
+	// only (anfs_emit), never by a harness's file tools
+	Spool string
 }
 
 // Cmd is what to run: argv (argv[0] the program), more environment, files to write in RunDir.

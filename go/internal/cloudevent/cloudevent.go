@@ -37,6 +37,7 @@ var (
 	spaceRE = regexp.MustCompile(`^[a-z0-9]{10}$`)
 	keyRE   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	roleRE  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	monthRE = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}$`)
 	timeRE  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$`)
 )
 
@@ -51,8 +52,12 @@ type Event struct {
 	ActorSpace string
 	ActorRole  string
 	SpacePath  string
-	Data       map[string]string
-	Scope      string // the space id, or "host"
+	// ActorRun is the run id anfsd stamped on a line a run wrote (agents/02d); ActorClaimed what
+	// that line said of its actor when it differed from the stamp: a claim, never an identity
+	ActorRun     string
+	ActorClaimed string
+	Data         map[string]string
+	Scope        string // the space id, or "host"
 }
 
 // Short is the type without io.anfs.: report.filed.
@@ -159,6 +164,12 @@ func Parse(line []byte) (Event, error) {
 		return e, err
 	}
 	if e.SpacePath, err = str("spacepath", false); err != nil {
+		return e, err
+	}
+	if e.ActorRun, err = str("actorrun", false); err != nil {
+		return e, err
+	}
+	if e.ActorClaimed, err = str("actorclaimed", false); err != nil {
 		return e, err
 	}
 	e.Data = map[string]string{}
@@ -304,6 +315,48 @@ func Append(events string, n New) (Event, error) {
 		return Event{}, err
 	}
 	return ev, f.Close()
+}
+
+// AppendLine appends one line (a newline is added when it has none) to
+// <events>/<scope>/<month>.jsonl in one write with O_APPEND, as Append does: anfsd's ingestion of
+// a run's spool (agents/02d). month is YYYY-MM.
+func AppendLine(events, scope, month string, line []byte) error {
+	if scope != "host" && !spaceRE.MatchString(scope) {
+		return fmt.Errorf("scope %q", scope)
+	}
+	if !monthRE.MatchString(month) {
+		return fmt.Errorf("month %q", month)
+	}
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		line = append(append([]byte(nil), line...), '\n')
+	}
+	if len(line) > Max {
+		return fmt.Errorf("%d bytes, over %d", len(line), Max)
+	}
+	dir := filepath.Join(events, scope)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, month+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(line); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// Month is the UTC month (YYYY-MM) of an event: its time, else its id's milliseconds.
+func (e Event) Month() string {
+	if len(e.Time) >= 7 {
+		return e.Time[:7]
+	}
+	if u, err := uuid.Parse(e.ID); err == nil {
+		return time.UnixMilli(idMillis(u)).UTC().Format("2006-01")
+	}
+	return time.Now().UTC().Format("2006-01")
 }
 
 // UUIDv7s from one process sort in the order they were made (uuid's monotonic counter); the clock

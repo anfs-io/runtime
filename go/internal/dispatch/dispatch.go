@@ -292,7 +292,13 @@ func (d *Dispatcher) Decide(r *space.Rule, ev cloudevent.Event, line []byte, dry
 	if n := d.Sup.Starts(sid, r.Name, d.now().Add(-r.Rate.Window)); n >= r.Rate.N {
 		return reject("rate", fmt.Sprintf("%d runs in the last %s (rate: %s)", n, r.Rate.Window, r.Rate))
 	}
-	if d.Sup.IsRunOf(sid, r.Name, ev.Actor) {
+	// loop: the run anfsd stamped on the line (actorrun, 02d) when there is one; a run cannot slip
+	// past it by claiming another actor
+	who := ev.Actor
+	if len(ev.ActorRun) >= 8 {
+		who = "run:" + ev.ActorRun[len(ev.ActorRun)-8:]
+	}
+	if d.Sup.IsRunOf(sid, r.Name, who) {
 		return reject("loop", fmt.Sprintf("the event is from %s, a run of this rule", ev.Actor))
 	}
 	if d.Sup.Full(sid, r.As, r.Role.Concurrency, r.Role.Queue) {

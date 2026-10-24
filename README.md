@@ -21,6 +21,15 @@ job, in its own session, with the access its harness can enforce, its life recor
 sink**: the consumer `anfsd-sink-report` hands each `report.*` event to `anfs report __sink`, which
 renders the report records into the report file.
 
+A run is fenced (agents/02d). Its **environment is an allow-list**: a working shell, the XDG
+paths, `ANFS_*`, and claude's own credential for claude; never `SSH_AUTH_SOCK`, `GH_TOKEN` or
+anything else anfsd's environment holds; git asks nobody and uses no credential helper. **Its own
+events** go into its spool, `runs/<run id>/events/` (`$ANFS_EVENTS_SPOOL`, the one directory of
+the run's it may write; core's `anfs_emit` writes there), and anfsd moves each line into the log
+with the run's identity stamped (`actor`, `actorspace`, `actorrole`, `actorrun`; a differing claim
+kept in `actorclaimed`), refusing `run.*`, a line whose directory is not its scope, and anything
+past `ANFSD_RUN_EVENTS_MAX` (1000).
+
 And **the podman follower** (agents/02c): one child, `podman events --format json --filter
 type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,
 died, removed, paused, unpaused, a change of health; a pod's created, started, stopped, removed)

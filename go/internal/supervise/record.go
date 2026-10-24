@@ -81,6 +81,10 @@ type Record struct {
 	Ended     string         `json:"ended,omitempty"`
 	Summary   string         `json:"summary,omitempty"`
 	Commits   map[string]int `json:"commits,omitempty"`
+
+	// what the run wrote into its spool (02d): lines moved into the log, lines refused
+	EventsIngested int `json:"events_ingested,omitempty"`
+	EventsRefused  int `json:"events_refused,omitempty"`
 }
 
 // Last8 is the run id's last 8 characters: ANFS_ACTOR's part, and what `anfs agents` accepts.

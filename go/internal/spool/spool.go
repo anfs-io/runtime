@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"syscall"
 )
 
 // ReadMax is the most bytes read from one file at a time; a line is at most 4096 bytes.
@@ -50,7 +51,10 @@ type Line struct {
 type Spool struct {
 	Dir         string
 	CursorsPath string
-	logf        func(string, ...any)
+	// NoFollow: a month file that is a symbolic link is never read (a run's spool, agents/02d).
+	// Files lists regular files in real directories only either way.
+	NoFollow bool
+	logf     func(string, ...any)
 
 	mu      sync.Mutex
 	cursors map[string]int64
@@ -168,7 +172,14 @@ func (s *Spool) Read(f File, max int) ([]Line, error) {
 	if max <= 0 {
 		return nil, nil
 	}
-	fh, err := os.Open(f.Path)
+	flag := os.O_RDONLY
+	if s.NoFollow {
+		flag |= syscall.O_NOFOLLOW
+		if st, err := os.Lstat(filepath.Dir(f.Path)); err != nil || !st.IsDir() {
+			return nil, fmt.Errorf("%s: not a directory", filepath.Dir(f.Path))
+		}
+	}
+	fh, err := os.OpenFile(f.Path, flag, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

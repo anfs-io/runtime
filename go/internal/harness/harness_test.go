@@ -18,6 +18,7 @@ func spec(h string) Spec {
 		Prompt: "Fix it.\n\n---\nfooter", Cwd: "/work/fix-r-1", RunDir: "/state/runs/r1", Timeout: 2 * time.Hour,
 		Write: []string{"/work/fix-r-1", "/tmp/anfs-work-501-3", "/notes/anfs"},
 		Read:  []string{"/spaces/anfs-dev", "/home/u/.local/share/anfs/sources"},
+		Spool: "/state/runs/r1/events",
 	}
 }
 
@@ -97,8 +98,14 @@ func TestClaudeSettings(t *testing.T) {
 		}
 	}
 	if !cfg.Sandbox.Enabled || !cfg.Sandbox.FailIfUnavailable || cfg.Sandbox.AllowUnsandboxedCommands ||
-		strings.Join(cfg.Sandbox.Filesystem.AllowWrite, " ") != "/notes/anfs /tmp/anfs-work-501-3 /work/fix-r-1" {
+		strings.Join(cfg.Sandbox.Filesystem.AllowWrite, " ") != "/notes/anfs /state/runs/r1/events /tmp/anfs-work-501-3 /work/fix-r-1" {
 		t.Errorf("sandbox %+v", cfg.Sandbox)
+	}
+	// the run's spool: its shell may write there (anfs_emit), its file tools may not
+	for _, a := range p.Allow {
+		if strings.Contains(a, "/state/runs/r1/events") {
+			t.Errorf("the spool in a file tool's allow: %s", a)
+		}
 	}
 	// never a flag that skips permissions; the prompt is last, after --
 	a := strings.Join(c.Argv, " ")

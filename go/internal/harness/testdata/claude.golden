@@ -84,6 +84,7 @@ Fix it.\n\n---\nfooter
     "filesystem": {
       "allowWrite": [
         "/notes/anfs",
+        "/state/runs/r1/events",
         "/tmp/anfs-work-501-3",
         "/work/fix-r-1"
       ]

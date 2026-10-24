@@ -44,6 +44,8 @@ type Supervisor struct {
 	RetryDelay func(attempt int) time.Duration
 	Env        []string // the environment runs start from (anfsd's)
 	Logf       func(string, ...any)
+	// RunEventsMax is the most lines a run's spool may put in the log (ANFSD_RUN_EVENTS_MAX)
+	RunEventsMax int
 
 	mu      sync.Mutex
 	ctx     context.Context
@@ -56,6 +58,8 @@ type Supervisor struct {
 	byEvent map[string]string      // <rule key>|<event id> -> run id
 	starts  map[string][]time.Time // rule key -> submissions (rate:)
 	runsOf  map[string]map[string]bool
+	ingest  map[string]*ingester // per working run: its spool's cursors (ingest.go)
+	ended   []*Record            // at Open: the records that say ended (drainRecent)
 	wake    chan struct{}
 	wg      sync.WaitGroup
 }
@@ -107,7 +111,7 @@ func (s *Supervisor) Open() error {
 	s.running, s.conc, s.adopted = map[string]int{}, map[string]int{}, map[string]*adoptee{}
 	s.byEvent, s.starts, s.runsOf = map[string]string{}, map[string][]time.Time{}, map[string]map[string]bool{}
 	s.wake = make(chan struct{}, 1)
-	s.working = nil
+	s.working, s.ended, s.ingest = nil, nil, map[string]*ingester{}
 	recs, err := s.Store.All()
 	if err != nil {
 		return err
@@ -121,6 +125,10 @@ func (s *Supervisor) Open() error {
 			s.working = append(s.working, r)
 			s.running[r.roleKey()]++
 			s.total++
+		default:
+			if Ended(r.State) {
+				s.ended = append(s.ended, r)
+			}
 		}
 	}
 	return nil
@@ -136,10 +144,16 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	if err := s.Open(); err != nil {
 		return err
 	}
+	s.drainRecent(s.ended)
+	s.ended = nil
 	for _, r := range s.working {
 		if s.alive(r) {
 			s.adopted[r.ID] = &adoptee{r: r}
 			s.Logf("run %s (%s) adopted: pid %d", r.ID, r.Rule, r.Pid)
+			if _, err := os.Stat(s.Store.SpoolDir(r.ID)); err == nil {
+				s.drain(r)
+				s.watchSpool(r)
+			}
 			continue
 		}
 		s.running[r.roleKey()]--
@@ -381,10 +395,15 @@ func (s *Supervisor) execute(r *Record) {
 	if r.Job != "" {
 		write = append([]string{cwd}, write...)
 	}
+	spoolDir, err := s.makeSpool(r)
+	if err != nil {
+		s.end(r, Failed, "spawn", err.Error(), nil, "")
+		return
+	}
 	spec := harness.Spec{
 		Harness: r.Harness, Model: r.Model, BudgetUSD: r.BudgetUSD, Args: r.Args,
 		Name: r.Rule + ":" + r.Last8(), Cwd: cwd, RunDir: dir, Timeout: r.TimeoutDur(),
-		Write: write, Read: read,
+		Write: write, Read: read, Spool: spoolDir,
 		Prompt: string(body) + Footer(r, cwd, bytes.TrimSpace(eventLine), write, read),
 	}
 	cmd, err := harness.Build(spec)
@@ -404,6 +423,7 @@ func (s *Supervisor) execute(r *Record) {
 		"ANFS_AS="+r.Address,
 		"ANFS_RUN="+r.ID,
 		"ANFS_EVENT="+filepath.Join(dir, "event.json"),
+		"ANFS_EVENTS_SPOOL="+spoolDir,
 	)
 	out, err := os.OpenFile(filepath.Join(dir, "out.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
@@ -425,6 +445,7 @@ func (s *Supervisor) execute(r *Record) {
 	r.State, r.Started = Working, now()
 	r.Exit, r.Reason, r.Detail = nil, "", ""
 	s.save(r)
+	s.watchSpool(r)
 	data := map[string]string{"rule": r.Rule, "harness": r.Harness, "attempt": strconv.Itoa(r.Attempt)}
 	if r.Job != "" {
 		data["job"], data["branch"] = r.Job, r.Job
@@ -652,8 +673,10 @@ func (s *Supervisor) finishDead(r *Record, timedOut bool) {
 	s.end(r, Failed, "orphaned", "the process ended while anfsd was not watching it, without an exit status", nil, "")
 }
 
-// end records a final state and emits it; a failed exit with retries left is queued again
+// end records a final state and emits it; a failed exit with retries left is queued again. What
+// the run wrote into its spool goes into the log first, so its events come before its end.
 func (s *Supervisor) end(r *Record, state, reason, detail string, exit *int, by string) {
+	s.drainFinal(r)
 	r.State, r.Reason, r.Detail, r.Exit, r.By, r.Ended = state, reason, detail, exit, by, now()
 	data := map[string]string{"rule": r.Rule}
 	if r.Job != "" {
@@ -864,6 +887,7 @@ func Footer(r *Record, cwd string, eventLine []byte, write, read []string) strin
 	}
 	fmt.Fprintf(&b, "You may write only in: %s. You may read: %s.\n\n", strings.Join(uniqSorted(write), ", "), strings.Join(uniqSorted(append(append([]string{}, read...), write...)), ", "))
 	b.WriteString("You may not: " + strings.Join(harness.Denied, "; ") + "; or write anywhere else. Merge, install, push and `anfs report close` are the person's.\n\n")
+	fmt.Fprintf(&b, "Events you emit go through `$ANFS_EVENTS_SPOOL` and are recorded as yours (run %s).\n\n", r.ID)
 	b.WriteString("End with a summary of what you did and what is left for the person.\n")
 	return b.String()
 }

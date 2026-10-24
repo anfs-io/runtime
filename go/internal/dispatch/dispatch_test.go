@@ -198,6 +198,16 @@ func TestGuards(t *testing.T) {
 	if actions(ds) != "fix-core-report:rejected(loop)" {
 		t.Errorf("loop: %s", actions(ds))
 	}
+	// loop through actorrun (02d): the run's line, stamped by anfsd, says another actor: still a loop
+	stamped, _, err := cloudevent.StampLine(filed(t, r, "r-5", "shell:person", 0),
+		cloudevent.Stamp{Actor: "shell:person", ActorSpace: sid, ActorRole: "maintainer", ActorRun: first.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds, _ = r.d.Handle(stamped)
+	if actions(ds) != "fix-core-report:rejected(loop)" {
+		t.Errorf("loop by actorrun: %s", actions(ds))
+	}
 	// rate: 2/h, one submitted; another submitted run reaches it
 	r2 := newRig(t, strings.Replace(spaceYML, "queue: 1", "queue: 5", 1))
 	for i, want := range []string{"submitted", "submitted", "rejected(rate)"} {
@@ -214,7 +224,7 @@ func TestGuards(t *testing.T) {
 			rej++
 		}
 	}
-	if rej != 3 {
+	if rej != 4 {
 		t.Errorf("%d rejected records", rej)
 	}
 }

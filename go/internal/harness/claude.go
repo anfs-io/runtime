@@ -41,7 +41,7 @@ func claude(s Spec) (Cmd, error) {
 			"enabled":                  true,
 			"failIfUnavailable":        true,
 			"allowUnsandboxedCommands": false,
-			"filesystem":               map[string]any{"allowWrite": write},
+			"filesystem":               map[string]any{"allowWrite": uniq(append(append([]string{}, write...), s.Spool))},
 		},
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")

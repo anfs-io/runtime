@@ -6,7 +6,11 @@
 # one) and a fake wsm and anfs on PATH: one report.filed line in the spool is a run, its
 # run.submitted, run.working and run.completed in the stream. The fake podman (internal/testfake:
 # never the real one) printing a recorded container start: container.started in the stream on
-# anfs.host.container.started. The other tests turn podman off (ANFSD_PODMAN=off), so a Linux
+# anfs.host.container.started. A run's own events (02d): the fake harness emits into
+# $ANFS_EVENTS_SPOOL through core's anfs_emit when ANFS_CORE_LIB names a core checkout's lib/anfs
+# (else a printf'd line), and they reach the stream stamped with the run's identity; a forged
+# actor arrives with actorclaimed; the run's environment lacks what anfsd's had (SSH_AUTH_SOCK,
+# GH_TOKEN). The other tests turn podman off (ANFSD_PODMAN=off), so a Linux
 # host's /usr/bin/podman is never run. Skipped, saying so, when nats-server or the nats CLI is not
 # on PATH.
 # Run: bats go/test/e2e.bats </dev/null   (from the repo's root; CI puts the pinned binaries on PATH)
@@ -199,6 +203,105 @@ YML
   grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/log/anfs.log"
   run nats stream get ANFS --last-for anfs.abcde23456.run.completed --json
   [[ "$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)" == *'"commits":"core:1"'* ]]
+}
+
+# Every message's data (the event), one per line
+stream_events() {
+  local n seq
+  n=$(msgs)
+  for (( seq = 1; seq <= n; seq++ )); do
+    nats stream get ANFS "$seq" --json | yq -p json -oy -r '.data' | base64 --decode
+    echo
+  done
+}
+
+@test "a run's own events: stamped with its identity on the bus; a forged actor marked; its environment the allow-list" {
+  local fakes="$BATS_TEST_DIRNAME/../internal/testfake/testdata" bin="$BATS_TEST_TMPDIR/bin" sp="$HOME/spaces/anfs-dev" i
+  mkdir -p "$bin" "$sp" "$BATS_TEST_TMPDIR/log" "$BATS_TEST_TMPDIR/ctl" "$BATS_TEST_TMPDIR/work"
+  ln -s "$fakes/fake-harness" "$bin/claude"
+  ln -s "$fakes/fake-anfs" "$bin/anfs"
+  ln -s "$(command -v bash)" "$bin/bash"     # core's lib needs bash 5; nothing else of the person's
+  printf '#!/bin/sh\necho %s\n' "'[{\"space\":\"anfs-dev\",\"status\":\"ok\",\"dir\":\"$sp\",\"id\":\"abcde23456\"}]'" > "$bin/wsm"
+  chmod +x "$bin/wsm"
+  cat > "$sp/space.yml" <<YML
+id: abcde23456
+agents:
+  maintainer: {harness: claude, concurrency: 3}
+dispatch:
+  - name: on-report
+    on: {type: report.filed}
+    as: maintainer
+    job: none
+    prompt: 'Look at {{subject}}.'
+YML
+  local how=printf
+  if [[ -n "${ANFS_CORE_LIB:-}" ]]; then
+    how=anfs_emit
+    mkdir -p "$HOME/.local/lib"
+    ln -s "$ANFS_CORE_LIB" "$HOME/.local/lib/anfs"
+  fi
+  # by the trigger's subject: -1 emits as itself, -2 as the person, -3 prints its environment
+  cat > "$BATS_TEST_TMPDIR/ctl/script" <<SH
+subj=\$(sed -n 's/.*"subject":"\([^"]*\)".*/\1/p' "\$ANFS_EVENT")
+emit() {
+  if [ $how = anfs_emit ]; then
+    bash -c 'source "\$HOME/.local/lib/anfs/paths.sh"; source "\$ANFS_LIB_DIR/log.sh"; source "\$ANFS_LIB_DIR/events.sh"; anfs_emit report.closed "\$1" to=file' _ "\$subj"
+  else
+    mkdir -p "\$ANFS_EVENTS_SPOOL/abcde23456"
+    printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012d","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","subject":"%s","time":"%s","datacontenttype":"application/json","actor":"%s","anfsv":1,"data":{"to":"file"}}\n' \
+      "\${subj##*-}" "\$subj" "\$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "\$ANFS_ACTOR" >> "\$ANFS_EVENTS_SPOOL/abcde23456/\$(date -u +%Y-%m).jsonl"
+  fi
+}
+case "\$subj" in
+  *-1) emit ;;
+  *-2) ANFS_ACTOR=shell:person ANFS_AS=anfs-dev/person emit ;;
+  *-3) env > "\$FAKE_LOG/run-env" ;;
+esac
+SH
+  echo script > "$BATS_TEST_TMPDIR/ctl/mode"
+  SSH_AUTH_SOCK=/tmp/agent.sock GH_TOKEN=gh-secret ANTHROPIC_API_KEY=sk-test ANFSD_PODMAN=off PATH="$bin:/usr/bin:/bin" \
+    "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
+  ANFSD_PID=$!
+  for i in $(seq 100); do
+    nats consumer info ANFS anfsd-dispatch --json >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  for i in 1 2 3; do
+    printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261024-%d","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"to":"file"}}\n' \
+      "$(( 90 + i ))" "$i" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
+  done
+  for i in $(seq 150); do
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.run.completed": 3'* ]] && break
+    sleep 0.2
+  done
+  run nats stream subjects ANFS --json
+  [[ "$output" == *'"anfs.abcde23456.run.completed": 3'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.abcde23456.report.closed": 2'* ]] || { echo "$output"; cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  local evs honest forged
+  evs=$(stream_events)
+  honest=$(grep '"io.anfs.report.closed"' <<< "$evs" | grep '"subject":"r-20261024-1"')
+  forged=$(grep '"io.anfs.report.closed"' <<< "$evs" | grep '"subject":"r-20261024-2"')
+  # stamped: the run's actor, its space and role, actorrun; no claim
+  [[ "$(yq -p json -oy -r '.actor' <<< "$honest")" == claude:???????? ]] || { echo "$honest"; false; }
+  [ "$(yq -p json -oy -r '.actorspace + " " + .actorrole' <<< "$honest")" = "abcde23456 maintainer" ]
+  [[ "$(yq -p json -oy -r '.actorrun' <<< "$honest")" == *"$(yq -p json -oy -r '.actor' <<< "$honest" | cut -d: -f2)" ]]
+  [ "$(yq -p json -oy -r '.actorclaimed // "none"' <<< "$honest")" = none ]
+  # forged: the stamp is the identity, the claim kept
+  [[ "$(yq -p json -oy -r '.actor' <<< "$forged")" == claude:???????? ]]
+  [[ -n "$(yq -p json -oy -r '.actorrun' <<< "$forged")" ]]
+  if [[ "$how" == anfs_emit ]]; then
+    [ "$(yq -p json -oy -r '.actorclaimed' <<< "$forged")" = "shell:person as abcde23456/person" ] || { echo "$forged"; false; }
+  else
+    [ "$(yq -p json -oy -r '.actorclaimed' <<< "$forged")" = "shell:person" ] || { echo "$forged"; false; }
+  fi
+  echo "emitted with: $how" >&3
+  # the third run's environment: none of anfsd's secrets, its own spool, claude's key (claude only)
+  local envf="$BATS_TEST_TMPDIR/log/run-env"
+  [ -f "$envf" ]
+  ! grep -q '^SSH_AUTH_SOCK=' "$envf"
+  ! grep -q '^GH_TOKEN=' "$envf"
+  grep -q '^ANFS_EVENTS_SPOOL=.*/runs/.*/events$' "$envf"
+  grep -q '^GIT_TERMINAL_PROMPT=0$' "$envf"
 }
 
 @test "podman: a container started is container.started in the stream, on anfs.host.container.started" {

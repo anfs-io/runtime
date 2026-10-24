@@ -9,7 +9,7 @@ import "fmt"
 // what fails the run.
 func antigravity(s Spec) (Cmd, error) {
 	argv := []string{"agy", "-p", s.Prompt, "--sandbox"}
-	for _, p := range uniq(append(append([]string{}, s.Read...), s.Write...)) {
+	for _, p := range uniq(append(append([]string{s.Spool}, s.Read...), s.Write...)) {
 		if p != s.Cwd {
 			argv = append(argv, "--add-dir", p)
 		}
