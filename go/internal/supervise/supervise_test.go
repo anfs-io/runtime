@@ -195,8 +195,9 @@ func TestLifecycleWithJob(t *testing.T) {
 		done.Commits["core"] != 1 || done.Commits["stack"] != 1 || *done.Exit != 0 || !done.JobMade || done.Pid == 0 {
 		t.Errorf("record %+v", done)
 	}
-	got := strings.Join(r.events_("job", "branch", "commits"), "\n")
-	want := "run.submitted job=fix-r-1\nrun.working job=fix-r-1 branch=fix-r-1\nrun.completed job=fix-r-1 commits=core:1 stack:1"
+	got := strings.Join(r.events_("job", "branch", "commits", "model", "input_tokens", "output_tokens", "cost_usd"), "\n")
+	// the usage the fake reports (its init line's model, 10 + 100 + 1000 prompt tokens)
+	want := "run.submitted job=fix-r-1\nrun.working job=fix-r-1 branch=fix-r-1\nrun.completed job=fix-r-1 commits=core:1 stack:1 model=fake input_tokens=1110 output_tokens=20 cost_usd=0.01"
 	if got != want {
 		t.Errorf("events:\n%s\nwant:\n%s", got, want)
 	}

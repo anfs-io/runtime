@@ -806,11 +806,18 @@ func (s *Supervisor) end(r *Record, state, reason, detail string, exit *int, by 
 	}
 	switch state {
 	case Completed:
-		r.Summary = s.summary(r)
+		out := s.output(r)
+		r.Summary = harness.Summary(r.Harness, out)
 		r.Commits = s.commits(r)
 		data["commits"] = commitsString(r.Repos, r.Commits)
 		data["summary"] = r.Summary
+		// the run usage (anfs-io/events REGISTRY.md): what the harness reports, the model else the rule's
+		harness.UsageOf(r.Harness, out).Data(data, r.Model)
 	case Failed:
+		// the usage when the harness got far enough to report it
+		if u := harness.UsageOf(r.Harness, s.output(r)); u.Known() {
+			u.Data(data, r.Model)
+		}
 		data["reason"] = reason
 		if exit != nil {
 			data["exit"] = strconv.Itoa(*exit)
@@ -887,18 +894,18 @@ func (s *Supervisor) emit(r *Record, typ string, data map[string]string) {
 	}
 }
 
-// summary: the final answer in out.log (its last 4 MiB)
-func (s *Supervisor) summary(r *Record) string {
+// output: out.log's last 4 MiB (the summary and the usage are at its end)
+func (s *Supervisor) output(r *Record) []byte {
 	f, err := os.Open(filepath.Join(s.Store.RunDir(r.ID), "out.log"))
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer f.Close()
 	if st, err := f.Stat(); err == nil && st.Size() > 4<<20 {
 		f.Seek(st.Size()-4<<20, io.SeekStart)
 	}
 	b, _ := io.ReadAll(f)
-	return harness.Summary(r.Harness, b)
+	return b
 }
 
 // commits: per repo of the job, the commits its branch has that main has not

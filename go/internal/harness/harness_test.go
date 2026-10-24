@@ -210,3 +210,42 @@ func TestSummary(t *testing.T) {
 		t.Errorf("render %q", r)
 	}
 }
+
+// The run usage from claude's stream: a result line in 2.1.296's shape (its field names checked
+// in the binary's strings; built, not recorded: no harness runs here) with two models in
+// modelUsage; the usage alone when there is no modelUsage; a failed run's result; others none
+func TestUsage(t *testing.T) {
+	out, err := os.ReadFile("testdata/claude-result.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := UsageOf("claude", out)
+	if u != (Usage{Model: "claude-opus-5-5", InputTokens: "206041", OutputTokens: "3390", CostUSD: "1.8423"}) {
+		t.Errorf("%+v", u)
+	}
+	data := map[string]string{}
+	u.Data(data, "rule-model")
+	if len(data) != 4 || data["model"] != "claude-opus-5-5" || data["cost_usd"] != "1.8423" {
+		t.Errorf("%v", data)
+	}
+	plain := `{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":2.5e-05,"usage":{"input_tokens":3,"cache_creation_input_tokens":4,"cache_read_input_tokens":5,"output_tokens":6}}`
+	if u := UsageOf("claude", []byte(plain)); u != (Usage{InputTokens: "12", OutputTokens: "6", CostUSD: "0.000025"}) {
+		t.Errorf("%+v", u)
+	}
+	data = map[string]string{}
+	UsageOf("claude", []byte(plain)).Data(data, "rule-model")
+	if data["model"] != "rule-model" {
+		t.Errorf("%v", data)
+	}
+	if u := UsageOf("claude", []byte("no stream\n")); u.Known() {
+		t.Errorf("%+v", u)
+	}
+	if u := UsageOf("opencode", out); u.Known() {
+		t.Errorf("opencode: %+v", u)
+	}
+	data = map[string]string{}
+	Usage{}.Data(data, "")
+	if len(data) != 0 {
+		t.Errorf("%v", data)
+	}
+}
