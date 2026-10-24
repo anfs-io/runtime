@@ -125,8 +125,11 @@ func TestRecordedLines(t *testing.T) {
 	}
 }
 
+// base: the lines' seconds count from 1000 s ago, so their events are of now's month
+var base = time.Now().Unix() - 1000
+
 func line(id, name, status string, sec int64) []byte {
-	b, _ := json.Marshal(map[string]any{"ID": id, "Name": name, "Status": status, "Type": "container", "time": sec,
+	b, _ := json.Marshal(map[string]any{"ID": id, "Name": name, "Status": status, "Type": "container", "time": base + sec,
 		"Image": "img", "ContainerExitCode": 0, "Attributes": map[string]string{}})
 	return b
 }
@@ -318,5 +321,16 @@ func TestOff(t *testing.T) {
 	w.Off()
 	if s := readState(t, w); s.State != "off" {
 		t.Errorf("state %+v", s)
+	}
+}
+
+// An event's time is podman's (timeNano, else time), not when anfsd read the line
+func TestPodmansTime(t *testing.T) {
+	w, _ := watcher(t)
+	w.Handle([]byte(`{"ID":"8b4335b2bbe937af42fd11842715f2ecd8edfee0ea34817b6b792070d6ccf080","Image":"busybox","Name":"k","Status":"start","time":1792703550,"timeNano":1792703550431703474,"Type":"container","Attributes":{}}`))
+	w.Handle([]byte(`{"ID":"9b4335b2bbe937af42fd11842715f2ecd8edfee0ea34817b6b792070d6ccf080","Image":"busybox","Name":"j","Status":"start","time":1792703551,"Type":"container","Attributes":{}}`))
+	evs := spooled(t, w.Events)
+	if len(evs) != 2 || evs[0].Time != "2026-10-22T21:12:30.431Z" || evs[1].Time != "2026-10-22T21:12:31.000Z" {
+		t.Errorf("%+v", evs)
 	}
 }

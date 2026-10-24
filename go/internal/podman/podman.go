@@ -130,7 +130,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		}
 		if connected {
 			connected = false
-			w.emit("podman.disconnected", "", map[string]string{"error": errText(err)})
+			w.emit("podman.disconnected", "", map[string]string{"error": errText(err)}, time.Time{})
 		}
 		if up && ranFor >= w.Stable {
 			failed = 0
@@ -197,7 +197,7 @@ func (w *Watcher) once(ctx context.Context, connected *bool) (bool, time.Duratio
 			*connected = true
 			w.say("podman connected: "+bin+" events", "connected")
 			w.writeState(State{State: "connected", Since: now()})
-			w.emit("podman.connected", "", nil)
+			w.emit("podman.connected", "", nil, time.Time{})
 		})
 	}
 	settle := time.AfterFunc(w.Settle, connect)
@@ -236,6 +236,7 @@ type Line struct {
 	ExitCode   *int              `json:"ContainerExitCode"`
 	Health     string            `json:"health_status"`
 	Time       int64             `json:"time"`
+	TimeNano   int64             `json:"timeNano"`
 	Attributes map[string]string `json:"Attributes"`
 }
 
@@ -315,8 +316,21 @@ func (w *Watcher) Handle(b []byte) error {
 		w.drop()
 		return nil
 	}
-	w.emit(typ, subject, data)
+	w.emit(typ, subject, data, l.When())
 	return nil
+}
+
+// When is when podman says the event happened (timeNano, else time), the zero time when it
+// says neither: the event's time is the occurrence's (anfs-io/events SPEC.md §1), not the
+// moment anfsd read the line.
+func (l Line) When() time.Time {
+	switch {
+	case l.TimeNano > 0:
+		return time.Unix(0, l.TimeNano)
+	case l.Time > 0:
+		return time.Unix(l.Time, 0)
+	}
+	return time.Time{}
 }
 
 // drop counts one over the rate; the count is logged once a DropReport, only while there are some
@@ -336,8 +350,8 @@ func (w *Watcher) drop() {
 	})
 }
 
-func (w *Watcher) emit(typ, subject string, data map[string]string) {
-	if _, err := cloudevent.Append(w.Events, cloudevent.New{Scope: "host", Type: typ, Subject: subject, Actor: "podman", Data: data}); err != nil {
+func (w *Watcher) emit(typ, subject string, data map[string]string, at time.Time) {
+	if _, err := cloudevent.Append(w.Events, cloudevent.New{Scope: "host", Type: typ, Subject: subject, Actor: "podman", Data: data, Time: at}); err != nil {
 		w.Logf("podman: %s %s not recorded: %v", typ, subject, err)
 	}
 }
