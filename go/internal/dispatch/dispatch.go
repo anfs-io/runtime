@@ -1,9 +1,15 @@
 // Package dispatch is anfsd's dispatcher: the rules of every installed space (internal/space),
 // the durable consumer anfsd-dispatch on the stream ANFS (its filters each rule's
 // anfs.<space id>.<type prefix>; the globs matched here), and for each event a rule matches, the
-// guards (stale, rate, queue, loop: each a run.rejected) and then a run submitted to the
-// supervisor. One run per rule and event id: a redelivery finds the record and is acked. The
-// message is acked only once the record is written.
+// guards and then a run submitted to the supervisor. The guards, in order: an invalid job name,
+// stale and loop (terminal: run.rejected), then rate and queue: under the rule's overflow: delay
+// (the default) the run is held (submitted, held rate|queue) while the rule holds fewer than its
+// hold:, else run.rejected; a rule that holds runs holds every new one too, so a later event
+// never overtakes an earlier one (02d). One record per rule and event id: a redelivery finds it
+// and is acked. The message is acked only once the record is written.
+//
+// anfs agents redispatch (02d) leaves a request in ~/.local/state/anfsd/redispatch/: read at start
+// and after each reload (SIGHUP), it submits a run skipping stale, rate and loop.
 //
 // The rules are read at start, on SIGHUP (anfs bus reload) and on a source.updated event.
 package dispatch
@@ -30,12 +36,15 @@ const SourceUpdated = "anfs.host.source.updated"
 
 // Submitter is what the dispatcher needs of the supervisor.
 type Submitter interface {
-	Has(spaceID, rule, eventID string) bool
+	Seen(spaceID, rule, eventID string) bool
+	Handled(spaceID, rule, eventID string) bool
+	Unended(spaceID, rule, eventID string) bool
+	Held(spaceID, rule string) (int, string)
 	Starts(spaceID, rule string, since time.Time) int
 	IsRunOf(spaceID, rule, actor string) bool
 	Full(spaceID, role string, concurrency, queue int) bool
 	SetConcurrency(spaceID, role string, n int)
-	Submit(r *supervise.Record, eventLine []byte, prompt string) error
+	Submit(r *supervise.Record, eventLine []byte, prompt, detail string) error
 	Reject(r *supervise.Record, eventLine []byte, reason, detail string) error
 }
 
@@ -46,6 +55,8 @@ type Dispatcher struct {
 	Load func(ctx context.Context) ([]*space.Space, error)
 	Logf func(string, ...any)
 	Now  func() time.Time
+	// RedispatchDir holds anfs agents redispatch's requests (empty: none are read)
+	RedispatchDir string
 
 	mu     sync.Mutex
 	spaces []*space.Space
@@ -192,8 +203,8 @@ func collide(a, b string) bool {
 type Decision struct {
 	Rule    *space.Rule
 	Match   bool
-	Action  string // submitted, rejected, duplicate, disabled (match only)
-	Reason  string // a rejection's
+	Action  string // submitted, held, rejected, duplicate, disabled (match only)
+	Reason  string // a rejection's, or why it is held (rate, queue)
 	Detail  string
 	Record  *supervise.Record
 	Prompt  string // the rule's prompt, rendered (anfsd adds the footer when it starts)
@@ -231,7 +242,7 @@ func (d *Dispatcher) Handle(line []byte) ([]Decision, error) {
 		if dec.Action == "rejected" {
 			err = d.Sup.Reject(dec.Record, line, dec.Reason, dec.Detail)
 		} else {
-			err = d.Sup.Submit(dec.Record, line, dec.Prompt)
+			err = d.Sup.Submit(dec.Record, line, dec.Prompt, dec.Detail)
 		}
 		if err != nil {
 			return out, fmt.Errorf("rule %s: recording the run: %w", r.Key(), err)
@@ -253,10 +264,65 @@ func (d *Dispatcher) Decide(r *space.Rule, ev cloudevent.Event, line []byte, dry
 	}
 	dec.Match = true
 	sid := r.Space.ID
-	if d.Sup.Has(sid, r.Name, ev.ID) {
+	if d.Sup.Seen(sid, r.Name, ev.ID) {
 		dec.Action = "duplicate"
 		return dec
 	}
+	d.record(&dec, r, ev)
+	rec := dec.Record
+	reject := func(reason, detail string) Decision {
+		dec.Action, dec.Reason, dec.Detail = "rejected", reason, detail
+		return dec
+	}
+	if r.Job != nil && !validJob(rec.Job) {
+		return reject("invalid", fmt.Sprintf("job.name renders to %q, not a job name", rec.Job))
+	}
+	if t, err := time.Parse(time.RFC3339, ev.Time); err == nil && d.now().Sub(t) > r.Stale {
+		return reject("stale", fmt.Sprintf("the event is %s old (stale: %s)", d.now().Sub(t).Round(time.Second), r.Stale))
+	}
+	// loop: the run anfsd stamped on the line (actorrun, 02d) when there is one; a run cannot slip
+	// past it by claiming another actor. Before rate and queue: a loop is never held
+	who := ev.Actor
+	if len(ev.ActorRun) >= 8 {
+		who = "run:" + ev.ActorRun[len(ev.ActorRun)-8:]
+	}
+	if d.Sup.IsRunOf(sid, r.Name, who) {
+		return reject("loop", fmt.Sprintf("the event is from %s, a run of this rule", ev.Actor))
+	}
+	held, heldWhy := d.Sup.Held(sid, r.Name)
+	why, detail := "", ""
+	switch n := d.Sup.Starts(sid, r.Name, d.now().Add(-r.Rate.Window)); {
+	case n >= r.Rate.N:
+		why, detail = "rate", fmt.Sprintf("%d runs in the last %s (rate: %s)", n, r.Rate.Window, r.Rate)
+	case d.Sup.Full(sid, r.As, r.Role.Concurrency, r.Role.Queue):
+		why, detail = "queue", fmt.Sprintf("%s's queue is full (queue: %d)", r.Address(), r.Role.Queue)
+	case held > 0:
+		why, detail = heldWhy, fmt.Sprintf("%d runs of this rule held before it (first in, first out)", held)
+	}
+	if why != "" {
+		if r.Overflow == space.OverflowReject {
+			return reject(why, detail)
+		}
+		if held >= r.Hold {
+			return reject(why, fmt.Sprintf("hold: %d full (%s)", r.Hold, detail))
+		}
+		dec.Action, dec.Reason, dec.Detail = "held", why, detail
+		rec.Held = why
+		if dry && r.Status == space.StatusDisabled {
+			dec.Action = "disabled"
+		}
+		return dec
+	}
+	dec.Action = "submitted"
+	if dry && r.Status == space.StatusDisabled {
+		dec.Action = "disabled"
+	}
+	return dec
+}
+
+// record is the run a rule would start for an event, and its rendered prompt
+func (d *Dispatcher) record(dec *Decision, r *space.Rule, ev cloudevent.Event) {
+	sid := r.Space.ID
 	id := supervise.NewID()
 	vars := space.Vars{Event: ev, Space: r.Space.Path, Run: id}
 	rec := &supervise.Record{
@@ -264,6 +330,7 @@ func (d *Dispatcher) Decide(r *space.Rule, ev cloudevent.Event, line []byte, dry
 		Event: ev.ID, EventType: ev.Short(), Subject: ev.Subject, Actor: ev.Actor,
 		Role: r.As, Address: r.Address(), Harness: r.Harness, Model: r.Model, BudgetUSD: r.BudgetUSD,
 		Args: r.Args, Concurrency: r.Role.Concurrency, Timeout: r.Timeout.String(), Retries: r.Retries,
+		Queue: r.Role.Queue, RateN: r.Rate.N, RateWindow: r.Rate.Window.String(), Stale: r.Stale.String(), EventTime: ev.Time,
 	}
 	for _, a := range r.Space.Access {
 		if a.Mode == "write" {
@@ -279,36 +346,6 @@ func (d *Dispatcher) Decide(r *space.Rule, ev cloudevent.Event, line []byte, dry
 	}
 	dec.Record = rec
 	dec.Prompt = space.Render(r.Prompt, vars)
-	reject := func(reason, detail string) Decision {
-		dec.Action, dec.Reason, dec.Detail = "rejected", reason, detail
-		return dec
-	}
-	if r.Job != nil && !validJob(rec.Job) {
-		return reject("invalid", fmt.Sprintf("job.name renders to %q, not a job name", rec.Job))
-	}
-	if t, err := time.Parse(time.RFC3339, ev.Time); err == nil && d.now().Sub(t) > r.Stale {
-		return reject("stale", fmt.Sprintf("the event is %s old (stale: %s)", d.now().Sub(t).Round(time.Second), r.Stale))
-	}
-	if n := d.Sup.Starts(sid, r.Name, d.now().Add(-r.Rate.Window)); n >= r.Rate.N {
-		return reject("rate", fmt.Sprintf("%d runs in the last %s (rate: %s)", n, r.Rate.Window, r.Rate))
-	}
-	// loop: the run anfsd stamped on the line (actorrun, 02d) when there is one; a run cannot slip
-	// past it by claiming another actor
-	who := ev.Actor
-	if len(ev.ActorRun) >= 8 {
-		who = "run:" + ev.ActorRun[len(ev.ActorRun)-8:]
-	}
-	if d.Sup.IsRunOf(sid, r.Name, who) {
-		return reject("loop", fmt.Sprintf("the event is from %s, a run of this rule", ev.Actor))
-	}
-	if d.Sup.Full(sid, r.As, r.Role.Concurrency, r.Role.Queue) {
-		return reject("queue", fmt.Sprintf("%s's queue is full (queue: %d)", r.Address(), r.Role.Queue))
-	}
-	dec.Action = "submitted"
-	if dry && r.Status == space.StatusDisabled {
-		dec.Action = "disabled"
-	}
-	return dec
 }
 
 func whyNot(r *space.Rule, ev cloudevent.Event, spacePath string) string {
@@ -407,6 +444,7 @@ func (d *Dispatcher) Run(ctx context.Context, b Consuming) error {
 			if d.Reload(ctx) != nil {
 				continue
 			}
+			d.Redispatch()
 			nf := d.Filters()
 			if strings.Join(nf, " ") == strings.Join(filters, " ") {
 				continue

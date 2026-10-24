@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/anfs-io/runtime/go/internal/bus"
 	"github.com/anfs-io/runtime/go/internal/cloudevent"
+	"github.com/anfs-io/runtime/go/internal/supervise"
 	"github.com/anfs-io/runtime/go/internal/testfake"
 	"github.com/anfs-io/runtime/go/internal/testnats"
 	"github.com/nats-io/nats.go/jetstream"
@@ -280,5 +282,135 @@ func TestRunDispatches(t *testing.T) {
 		if !strings.Contains(stderr.String(), w) {
 			t.Errorf("log lacks %q:\n%s", w, stderr.String())
 		}
+	}
+}
+
+// cpuOf is a process's CPU time as ps says it ([[dd-]hh:]mm:ss[.ff])
+func cpuOf(t *testing.T, pid int) time.Duration {
+	b, err := exec.Command("ps", "-o", "time=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.TrimSpace(string(b))
+	days := 0
+	if d, rest, ok := strings.Cut(s, "-"); ok {
+		days, _ = strconv.Atoi(d)
+		s = rest
+	}
+	var total float64
+	for _, p := range strings.Split(s, ":") {
+		v, _ := strconv.ParseFloat(p, 64)
+		total = total*60 + v
+	}
+	return time.Duration((total + float64(days)*86400) * float64(time.Second))
+}
+
+// redispatch (02d): a request left while anfsd was down is a run at its start (stale skipped);
+// a rate-held run then waits on a timer with anfsd idle (under 0.2 s of CPU in 10 s); a request
+// and SIGHUP is a run though the rate is spent; the requests are removed
+func TestRedispatchAndHeldIdle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("10 s idle")
+	}
+	srv := testnats.Start(t, testnats.Users{"anfsd": "pw"})
+	h := home(t, srv, "pw")
+	f, e := env(t, h)
+	dir := filepath.Join(h, "spaces", "anfs-dev")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "space.yml"), []byte(`id: abcde23456
+agents:
+  maintainer: {harness: claude}
+dispatch:
+  - {name: once-an-hour, on: {type: report.filed}, as: maintainer, job: none, prompt: "look at {{subject}}", rate: 1/h}
+`), 0o644)
+	f.Wsm(`[{"space":"anfs-dev","status":"ok","dir":"` + dir + `","id":"abcde23456"}]`)
+	events := filepath.Join(h, ".local/state/anfs/events")
+	os.MkdirAll(filepath.Join(events, "abcde23456"), 0o755)
+	reqs := filepath.Join(h, ".local/state/anfsd/redispatch")
+	os.MkdirAll(reqs, 0o700)
+	old := func(subject string) string {
+		l, _, err := cloudevent.Line(cloudevent.New{Scope: "abcde23456", Type: "report.filed", Subject: subject, Actor: "shell:t"},
+			time.Now().Add(-48*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(l))
+	}
+	writeReq := func(subject string) {
+		b, _ := json.Marshal(map[string]any{"event": old(subject), "rule": "", "by": "shell:person"})
+		os.WriteFile(filepath.Join(reqs, supervise.NewID()+".json"), b, 0o600)
+	}
+	writeReq("r-old-1")
+	bin := build(t)
+	cmd := exec.Command(bin, "run")
+	cmd.Env = e
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	runs := filepath.Join(h, ".local/state/anfsd/runs")
+	states := func() map[string]string {
+		out := map[string]string{}
+		recs, _ := (supervise.Store{Dir: runs}).All()
+		for _, r := range recs {
+			st := r.State
+			if r.Held != "" {
+				st += ":" + r.Held
+			}
+			out[r.Subject] = st
+		}
+		return out
+	}
+	waitFor := func(subject, state string) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for states()[subject] != state {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %v, wanted %s\n%s", subject, states(), state, stderr.String())
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	waitFor("r-old-1", "completed")
+	b, err := bus.Connect(bus.Options{URL: srv.URL(), User: "anfsd", Password: "pw"}, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		if _, err := b.JetStream().Consumer(context.Background(), bus.Stream, "anfsd-dispatch"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no consumer\n%s", stderr.String())
+		}
+	}
+	// the rate (1/h) is spent by the redispatched run: a new report is held
+	cloudevent.Append(events, cloudevent.New{Scope: "abcde23456", Type: "report.filed", Subject: "r-new", Actor: "shell:t"})
+	waitFor("r-new", "submitted:rate")
+	time.Sleep(time.Second)
+	c0 := cpuOf(t, cmd.Process.Pid)
+	time.Sleep(10 * time.Second)
+	c1 := cpuOf(t, cmd.Process.Pid)
+	t.Logf("CPU over 10 s with a run held on a rate timer: %v", c1-c0)
+	if c1-c0 > 200*time.Millisecond {
+		t.Errorf("CPU %v over 10 s with a held run: a loop?", c1-c0)
+	}
+	// a request and SIGHUP: a run though the rate is spent
+	writeReq("r-old-2")
+	cmd.Process.Signal(syscall.SIGHUP)
+	waitFor("r-old-2", "completed")
+	if st := states()["r-new"]; st != "submitted:rate" {
+		t.Errorf("r-new %s", st)
+	}
+	if ents, _ := os.ReadDir(reqs); len(ents) != 0 {
+		t.Errorf("%d requests left", len(ents))
+	}
+	cmd.Process.Signal(syscall.SIGTERM)
+	cmd.Wait()
+	if !strings.Contains(stderr.String(), "redispatch ") || !strings.Contains(stderr.String(), "submitted run ") {
+		t.Errorf("log:\n%s", stderr.String())
 	}
 }

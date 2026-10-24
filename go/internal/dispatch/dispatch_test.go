@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,19 +180,25 @@ func TestSubmitOncePerEvent(t *testing.T) {
 }
 
 func TestGuards(t *testing.T) {
-	r := newRig(t, spaceYML)
+	r := newRig(t, strings.Replace(spaceYML, "    stale: 1h\n", "    stale: 1h\n    overflow: reject\n", 1))
 	// stale
 	ds, _ := r.d.Handle(filed(t, r, "r-1", "shell:me", 2*time.Hour))
 	if actions(ds) != "fix-core-report:rejected(stale)" {
 		t.Errorf("stale: %s", actions(ds))
 	}
-	// queue: concurrency 1 and queue 1, no run started (the supervisor is only open): the
-	// first waits, the second is beyond the queue
+	// queue under overflow: reject: concurrency 1 and queue 1, no run started (the supervisor is
+	// only open): the first waits, the second is beyond the queue
 	ds, _ = r.d.Handle(filed(t, r, "r-2", "shell:me", 0))
 	first := ds[0].Record
-	ds2, _ := r.d.Handle(filed(t, r, "r-3", "shell:me", 0))
+	l3 := filed(t, r, "r-3", "shell:me", 0)
+	ds2, _ := r.d.Handle(l3)
 	if actions(ds) != "fix-core-report:submitted" || actions(ds2) != "fix-core-report:rejected(queue)" {
 		t.Errorf("queue: %s / %s", actions(ds), actions(ds2))
+	}
+	// rejected for the queue: seen (a redelivery gives no second run.rejected), not handled
+	ev3, _ := cloudevent.Parse(l3)
+	if ds, _ := r.d.Handle(l3); len(ds) != 0 || !r.sup.Seen(sid, "fix-core-report", ev3.ID) || r.sup.Handled(sid, "fix-core-report", ev3.ID) {
+		t.Errorf("redelivery of a rejection: %s", actions(ds))
 	}
 	// loop: an event from a run of this rule
 	ds, _ = r.d.Handle(filed(t, r, "r-4", "claude:"+first.Last8(), 0))
@@ -208,8 +215,8 @@ func TestGuards(t *testing.T) {
 	if actions(ds) != "fix-core-report:rejected(loop)" {
 		t.Errorf("loop by actorrun: %s", actions(ds))
 	}
-	// rate: 2/h, one submitted; another submitted run reaches it
-	r2 := newRig(t, strings.Replace(spaceYML, "queue: 1", "queue: 5", 1))
+	// rate under overflow: reject: 2/h, two queued; the third is rejected
+	r2 := newRig(t, strings.Replace(strings.Replace(spaceYML, "queue: 1", "queue: 5", 1), "    stale: 1h\n", "    stale: 1h\n    overflow: reject\n", 1))
 	for i, want := range []string{"submitted", "submitted", "rejected(rate)"} {
 		ds, _ := r2.d.Handle(filed(t, r2, "r-"+string(rune('a'+i)), "shell:me", 0))
 		if actions(ds) != "fix-core-report:"+want {
@@ -226,6 +233,60 @@ func TestGuards(t *testing.T) {
 	}
 	if rej != 4 {
 		t.Errorf("%d rejected records", rej)
+	}
+}
+
+// overflow: delay (the default): a full queue or a spent rate holds the run, up to hold:; a rule
+// that holds runs holds the next one too; a loop is never held
+func TestHold(t *testing.T) {
+	r := newRig(t, strings.Replace(spaceYML, "    stale: 1h\n", "    stale: 1h\n    hold: 2\n", 1))
+	ds, _ := r.d.Handle(filed(t, r, "r-1", "shell:me", 0))
+	first := ds[0].Record
+	var got []string
+	for _, s := range []string{"r-2", "r-3", "r-4"} {
+		ds, _ := r.d.Handle(filed(t, r, s, "shell:me", 0))
+		got = append(got, actions(ds)+" "+ds[0].Detail)
+	}
+	want := []string{
+		"fix-core-report:held(queue) anfs-dev/maintainer's queue is full (queue: 1)",
+		"fix-core-report:held(queue) anfs-dev/maintainer's queue is full (queue: 1)",
+		"fix-core-report:rejected(queue) hold: 2 full (anfs-dev/maintainer's queue is full (queue: 1))",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s", strings.Join(got, "\n"))
+	}
+	if n, why := r.sup.Held(sid, "fix-core-report"); n != 2 || why != "queue" {
+		t.Errorf("held %d %s", n, why)
+	}
+	// a loop is rejected, not held
+	ds, _ = r.d.Handle(filed(t, r, "r-5", "claude:"+first.Last8(), 0))
+	if actions(ds) != "fix-core-report:rejected(loop)" {
+		t.Errorf("loop: %s", actions(ds))
+	}
+	// the records: two held (submitted + held), run.submitted with held and detail
+	recs, _ := r.sup.Store.All()
+	h := 0
+	for _, rc := range recs {
+		if rc.State == supervise.Submitted && rc.Held == "queue" && rc.HeldSince != "" && rc.Queued == "" {
+			h++
+		}
+	}
+	if h != 2 {
+		t.Errorf("%d held records", h)
+	}
+	b, _ := os.ReadFile(filepath.Join(r.sup.Events, sid, time.Now().UTC().Format("2006-01")+".jsonl"))
+	if !strings.Contains(string(b), `"detail":"anfs-dev/maintainer's queue is full (queue: 1)","event":`) || !strings.Contains(string(b), `"held":"queue"`) {
+		t.Errorf("run.submitted:\n%s", b)
+	}
+	// rate: 2/h with a roomy queue: the third is held for the rate, the fourth behind it
+	r2 := newRig(t, strings.Replace(spaceYML, "queue: 1", "queue: 5", 1))
+	got = nil
+	for i := 0; i < 4; i++ {
+		ds, _ := r2.d.Handle(filed(t, r2, "r-"+string(rune('a'+i)), "shell:me", 0))
+		got = append(got, actions(ds))
+	}
+	if strings.Join(got, " ") != "fix-core-report:submitted fix-core-report:submitted fix-core-report:held(rate) fix-core-report:held(rate)" {
+		t.Errorf("rate: %v", got)
 	}
 }
 
@@ -316,3 +377,73 @@ func TestConsumer(t *testing.T) {
 }
 
 type consumerInfo struct{ filters []string }
+
+func request(t *testing.T, dir string, line []byte, rule string, again bool) {
+	t.Helper()
+	os.MkdirAll(dir, 0o700)
+	b, _ := json.Marshal(Request{Event: strings.TrimSpace(string(line)), Rule: rule, By: "shell:person", Again: again})
+	if err := os.WriteFile(filepath.Join(dir, supervise.NewID()+".json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// anfs agents redispatch's requests: a run that skips stale, rate and loop (it can be held for
+// the queue); refused for a run not ended, a handled event without again, a disabled rule; the
+// files removed
+func TestRedispatch(t *testing.T) {
+	r := newRig(t, strings.Replace(spaceYML, "    stale: 1h\n", "    stale: 1h\n    overflow: reject\n", 1))
+	r.d.RedispatchDir = filepath.Join(t.TempDir(), "redispatch")
+	a := filed(t, r, "r-1", "shell:me", 0)
+	b := filed(t, r, "r-2", "shell:me", 0)
+	c := filed(t, r, "r-3", "shell:me", 2*time.Hour)
+	ds, _ := r.d.Handle(a)
+	first := ds[0].Record
+	d := filed(t, r, "r-4", "claude:"+first.Last8(), 0)
+	for _, l := range [][]byte{b, c, d} {
+		r.d.Handle(l)
+	}
+	request(t, r.d.RedispatchDir, b, "", false)
+	got := r.d.Redispatch()
+	if len(got) == 0 || !strings.HasPrefix(got[0], "anfs-dev/fix-core-report: submitted run ") || !strings.HasSuffix(got[0], "held for the queue") {
+		t.Errorf("rejected for the queue: %v", got)
+	}
+	for _, c := range []struct {
+		line  []byte
+		rule  string
+		again bool
+		want  string
+	}{
+		{a, "", false, "anfs-dev/fix-core-report: refused: it has a run for this event that has not ended"},
+		{b, "", false, "anfs-dev/fix-core-report: refused: it has a run for this event that has not ended"},
+		{c, "fix-core-report", false, "anfs-dev/fix-core-report: refused: it already handled this event (--again for another run)"},
+		{d, "", true, "anfs-dev/fix-core-report: submitted run "},
+		{a, "off", false, "anfs-dev/off: refused: the rule is disabled (enabled: false)"},
+		{a, "nonesuch", false, "no rule nonesuch"},
+		{event(t, sid, "report.closed", "r-9", "shell:me", r.now, nil), "", false, "no rule matches report.closed r-9"},
+	} {
+		request(t, r.d.RedispatchDir, c.line, c.rule, c.again)
+		got := r.d.Redispatch()
+		if len(got) == 0 || !strings.HasPrefix(got[0], c.want) {
+			t.Errorf("%s: %v", c.want, got)
+		}
+	}
+	// stale skipped: c, stale and rejected, is handled (a stale rejection is final); with again it
+	// is submitted though 2h old
+	request(t, r.d.RedispatchDir, c, "", true)
+	if got := r.d.Redispatch(); len(got) == 0 || !strings.Contains(got[0], "submitted run ") {
+		t.Errorf("stale with again: %v", got)
+	}
+	if ents, _ := os.ReadDir(r.d.RedispatchDir); len(ents) != 0 {
+		t.Errorf("%d requests left", len(ents))
+	}
+	recs, _ := r.sup.Store.All()
+	n := 0
+	for _, rc := range recs {
+		if rc.RedispatchBy == "shell:person" {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Errorf("%d redispatched records", n)
+	}
+}

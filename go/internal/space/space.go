@@ -54,6 +54,15 @@ const (
 	DefaultRate    = 20 // starts per hour
 	MaxRetries     = 2
 	DefaultQueue   = 10
+	DefaultHold    = 20 // runs of a rule held at once (02d)
+	MaxHold        = 200
+)
+
+// Overflow is what a full queue or a spent rate does to a run (02d): delay holds it (submitted,
+// held), reject rejects it.
+const (
+	OverflowDelay  = "delay"
+	OverflowReject = "reject"
 )
 
 // Access is one path a space's dispatched agents may reach: absolute, cleaned, mode read or write.
@@ -122,6 +131,8 @@ type Rule struct {
 	Rate       Rate
 	Stale      time.Duration
 	Retries    int
+	Overflow   string // delay (default) or reject
+	Hold       int    // most runs of this rule held at once
 
 	Space    *Space
 	Role     *Role
@@ -385,6 +396,8 @@ type rawRule struct {
 	Rate       string    `yaml:"rate"`
 	Stale      string    `yaml:"stale"`
 	Retries    *int      `yaml:"retries"`
+	Overflow   string    `yaml:"overflow"`
+	Hold       *int      `yaml:"hold"`
 }
 
 func (s *Space) parseRules(n *yaml.Node, env Env, accessErr, rolesErr error) {
@@ -590,6 +603,21 @@ func (s *Space) parseRule(r *Rule, n *yaml.Node, env Env) error {
 	}
 	if r.Retries < 0 || r.Retries > MaxRetries {
 		return fmt.Errorf("retries: %d is 0 to %d", r.Retries, MaxRetries)
+	}
+	switch raw.Overflow {
+	case "", OverflowDelay:
+		r.Overflow = OverflowDelay
+	case OverflowReject:
+		r.Overflow = OverflowReject
+	default:
+		return fmt.Errorf("overflow: %q is delay or reject", raw.Overflow)
+	}
+	r.Hold = DefaultHold
+	if raw.Hold != nil {
+		r.Hold = *raw.Hold
+	}
+	if r.Hold < 0 || r.Hold > MaxHold {
+		return fmt.Errorf("hold: %d is 0 to %d", r.Hold, MaxHold)
 	}
 	return nil
 }

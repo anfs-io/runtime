@@ -62,17 +62,33 @@ type Record struct {
 	Write   []string `json:"write,omitempty"` // access: write paths
 
 	Concurrency int    `json:"concurrency"`
+	Queue       int    `json:"queue"` // the role's queue: how many may wait (02d: when a held run may enter)
 	Timeout     string `json:"timeout"`
 	Retries     int    `json:"retries"`
 	Attempt     int    `json:"attempt"`
+	// the rule's rate: starts per window (02d: when a held run may enter the queue)
+	RateN      int    `json:"rate_n,omitempty"`
+	RateWindow string `json:"rate_window,omitempty"`
+	// Stale is the rule's stale: a run that waited past it is rejected when it would start
+	// (EventTime is the trigger's time); a redispatched one is exempt
+	Stale     string `json:"stale,omitempty"`
+	EventTime string `json:"event_time,omitempty"`
 
 	Argv    []string `json:"argv,omitempty"`
 	Pid     int      `json:"pid,omitempty"`
 	Pgid    int      `json:"pgid,omitempty"`
 	PsStart string   `json:"ps_start,omitempty"` // the process's start time as ps says it (pid reuse)
 
-	State     string         `json:"state"`
-	Reason    string         `json:"reason,omitempty"` // rejected: stale, rate, queue, loop; failed: exit, timeout, job, spawn, orphaned
+	State string `json:"state"`
+	// Held: a submitted run waiting for its rule's rate or its role's queue (rate, queue), since
+	// HeldSince; Queued: when it entered its role's queue (what rate: counts)
+	Held      string `json:"held,omitempty"`
+	HeldSince string `json:"held_since,omitempty"`
+	Queued    string `json:"queued,omitempty"`
+	// RedispatchBy: the run was asked for by anfs agents redispatch (stale, rate and loop skipped)
+	RedispatchBy string `json:"redispatch_by,omitempty"`
+
+	Reason    string         `json:"reason,omitempty"` // rejected: stale, rate, queue, loop, invalid; failed: exit, timeout, job, spawn, orphaned
 	Detail    string         `json:"detail,omitempty"`
 	Exit      *int           `json:"exit,omitempty"`
 	By        string         `json:"by,omitempty"` // who canceled it
@@ -96,6 +112,18 @@ func (r *Record) TimeoutDur() time.Duration {
 	if err != nil || d <= 0 {
 		return time.Hour
 	}
+	return d
+}
+
+// RateWin is the rule's rate window (0: no rate recorded, a record from before 02d).
+func (r *Record) RateWin() time.Duration {
+	d, _ := time.ParseDuration(r.RateWindow)
+	return d
+}
+
+// StaleDur is the rule's stale (0: none recorded).
+func (r *Record) StaleDur() time.Duration {
+	d, _ := time.ParseDuration(r.Stale)
 	return d
 }
 

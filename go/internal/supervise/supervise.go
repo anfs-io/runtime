@@ -57,8 +57,12 @@ type Supervisor struct {
 	conc    map[string]int // a role's concurrency, as the rules last loaded say
 	adopted map[string]*adoptee
 	working []*Record              // at Open: the records that say working
-	byEvent map[string]string      // <rule key>|<event id> -> run id
-	starts  map[string][]time.Time // rule key -> submissions (rate:)
+	byEvent map[string]string      // <rule key>|<event id> -> run id (any record: Seen)
+	handled map[string]bool        // <rule key>|<event id> with a run not rejected for queue or rate
+	unended map[string]bool        // <rule key>|<event id> with a run not ended
+	starts  map[string][]time.Time // rule key -> runs entering the queue (rate:)
+	held    map[string][]*Record   // rule key -> runs held for its rate or its role's queue, oldest first
+	timers  map[string]*time.Timer // rule key -> the rate timer while it holds runs
 	runsOf  map[string]map[string]bool
 	ingest  map[string]*ingester // per working run: its spool's cursors (ingest.go)
 	ended   []*Record            // at Open: the records that say ended (drainRecent)
@@ -112,6 +116,8 @@ func (s *Supervisor) Open() error {
 	}
 	s.running, s.conc, s.adopted = map[string]int{}, map[string]int{}, map[string]*adoptee{}
 	s.byEvent, s.starts, s.runsOf = map[string]string{}, map[string][]time.Time{}, map[string]map[string]bool{}
+	s.handled, s.unended, s.held, s.timers = map[string]bool{}, map[string]bool{}, map[string][]*Record{}, map[string]*time.Timer{}
+	s.queue = nil
 	s.wake = make(chan struct{}, 1)
 	s.working, s.ended, s.ingest = nil, nil, map[string]*ingester{}
 	recs, err := s.Store.All()
@@ -122,7 +128,11 @@ func (s *Supervisor) Open() error {
 		s.index(r)
 		switch r.State {
 		case Submitted:
-			s.queue = append(s.queue, r)
+			if r.Held != "" {
+				s.held[r.ruleKey()] = append(s.held[r.ruleKey()], r) // ids sort by time: the order holds
+			} else {
+				s.queue = append(s.queue, r)
+			}
 		case Working:
 			s.working = append(s.working, r)
 			s.running[r.roleKey()]++
@@ -177,11 +187,21 @@ func (s *Supervisor) Start(ctx context.Context) error {
 func (s *Supervisor) Wait() { s.wg.Wait() }
 
 func (s *Supervisor) index(r *Record) {
-	s.byEvent[r.ruleKey()+"|"+r.Event] = r.ID
-	if r.State != Rejected {
-		if t, err := time.Parse(time.RFC3339, r.Submitted); err == nil {
-			s.starts[r.ruleKey()] = append(s.starts[r.ruleKey()], t)
-		}
+	k := r.ruleKey() + "|" + r.Event
+	s.byEvent[k] = r.ID
+	if !(r.State == Rejected && (r.Reason == "queue" || r.Reason == "rate")) {
+		s.handled[k] = true
+	}
+	if !Ended(r.State) {
+		s.unended[k] = true
+	}
+	// rate: counts a run when it entered the queue (a record from before 02d: when submitted)
+	when := r.Queued
+	if when == "" && r.Held == "" && r.State != Rejected {
+		when = r.Submitted
+	}
+	if t, err := time.Parse(time.RFC3339, when); err == nil && when != "" {
+		s.starts[r.ruleKey()] = append(s.starts[r.ruleKey()], t)
 	}
 	if s.runsOf[r.ruleKey()] == nil {
 		s.runsOf[r.ruleKey()] = map[string]bool{}
@@ -189,15 +209,43 @@ func (s *Supervisor) index(r *Record) {
 	s.runsOf[r.ruleKey()][r.Last8()] = true
 }
 
-// Has says whether the rule already has a run (or a rejection) for the event: a redelivery.
-func (s *Supervisor) Has(spaceID, rule, eventID string) bool {
+// Seen says whether the rule already has a record for the event, a rejection included: a NATS
+// redelivery is acked without a second run.rejected.
+func (s *Supervisor) Seen(spaceID, rule, eventID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.byEvent[RuleKey(spaceID, rule)+"|"+eventID]
 	return ok
 }
 
-// Starts is how many runs the rule was given since t (rate:).
+// Handled says whether the rule has a run for the event that is not rejected for queue or rate
+// (02d): an unhandled event is what anfs agents redispatch takes.
+func (s *Supervisor) Handled(spaceID, rule, eventID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.handled[RuleKey(spaceID, rule)+"|"+eventID]
+}
+
+// Unended says whether the rule has a run for the event that has not ended (queued, held,
+// working).
+func (s *Supervisor) Unended(spaceID, rule, eventID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unended[RuleKey(spaceID, rule)+"|"+eventID]
+}
+
+// Held is how many runs the rule holds, and why the newest is held (rate or queue).
+func (s *Supervisor) Held(spaceID, rule string) (int, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := s.held[RuleKey(spaceID, rule)]
+	if len(h) == 0 {
+		return 0, ""
+	}
+	return len(h), h[len(h)-1].Held
+}
+
+// Starts is how many runs of the rule entered the queue since t (rate:).
 func (s *Supervisor) Starts(spaceID, rule string, since time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -226,7 +274,10 @@ func (s *Supervisor) IsRunOf(spaceID, rule, actor string) bool {
 func (s *Supervisor) Full(spaceID, role string, concurrency, queue int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := RoleKey(spaceID, role)
+	return s.full(RoleKey(spaceID, role), concurrency, queue)
+}
+
+func (s *Supervisor) full(k string, concurrency, queue int) bool {
 	w := 0
 	for _, r := range s.queue {
 		if r.roleKey() == k {
@@ -239,11 +290,15 @@ func (s *Supervisor) Full(spaceID, role string, concurrency, queue int) bool {
 	return w >= queue
 }
 
-// Counts is how many runs are working and waiting (anfs bus status reads the records instead).
-func (s *Supervisor) Counts() (working, queued int) {
+// Counts is how many runs are working, waiting in a queue, and held (anfs bus status reads the
+// records instead).
+func (s *Supervisor) Counts() (working, queued, held int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.total, len(s.queue)
+	for _, h := range s.held {
+		held += len(h)
+	}
+	return s.total, len(s.queue), held
 }
 
 // SetConcurrency records a role's concurrency from the rules just loaded.
@@ -255,19 +310,35 @@ func (s *Supervisor) SetConcurrency(spaceID, role string, n int) {
 }
 
 // Submit records a run (run.json, the event's line, the prompt), emits run.submitted, and queues
-// it. The dispatcher acks the event after this.
-func (s *Supervisor) Submit(r *Record, eventLine []byte, prompt string) error {
+// it, or holds it when r.Held says so (rate or queue; detail says why, in run.submitted's data).
+// The dispatcher acks the event after this.
+func (s *Supervisor) Submit(r *Record, eventLine []byte, prompt, detail string) error {
 	r.State, r.Submitted, r.Attempt = Submitted, now(), 1
+	if r.Held != "" {
+		r.HeldSince = r.Submitted
+	} else {
+		r.Queued = r.Submitted
+	}
 	if err := s.write(r, eventLine, prompt); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	s.index(r)
-	s.queue = append(s.queue, r)
+	if r.Held != "" {
+		s.held[r.ruleKey()] = append(s.held[r.ruleKey()], r)
+	} else {
+		s.queue = append(s.queue, r)
+	}
 	s.mu.Unlock()
 	data := map[string]string{"rule": r.Rule, "role": r.Role, "harness": r.Harness, "event": r.Event}
 	if r.Job != "" {
 		data["job"] = r.Job
+	}
+	if r.Held != "" {
+		data["held"], data["detail"] = r.Held, detail
+	}
+	if r.RedispatchBy != "" {
+		data["redispatch"] = r.RedispatchBy
 	}
 	s.emit(r, "run.submitted", data)
 	s.signal()
@@ -284,7 +355,11 @@ func (s *Supervisor) Reject(r *Record, eventLine []byte, reason, detail string) 
 	s.mu.Lock()
 	s.index(r)
 	s.mu.Unlock()
-	s.emit(r, "run.rejected", map[string]string{"rule": r.Rule, "reason": reason, "event": r.Event})
+	data := map[string]string{"rule": r.Rule, "reason": reason, "event": r.Event}
+	if detail != "" {
+		data["detail"] = harness.Cut(detail, 500)
+	}
+	s.emit(r, "run.rejected", data)
 	return nil
 }
 
@@ -334,22 +409,20 @@ func (s *Supervisor) concurrency(r *Record) int {
 	return 1
 }
 
-// schedule starts what may start: oldest first, per role and host-wide
+// schedule moves held runs into their queue when their rule's rate and their role's queue let
+// them, then starts what may start: oldest first, per role and host-wide
 func (s *Supervisor) schedule() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx.Err() != nil {
 		return
 	}
+	s.releaseHeld()
 	for i := 0; i < len(s.queue); {
 		r := s.queue[i]
 		if by, ok := s.Store.Canceled(r.ID); ok {
 			s.queue = append(s.queue[:i], s.queue[i+1:]...)
-			s.wg.Add(1)
-			go func() {
-				defer s.wg.Done()
-				s.end(r, Canceled, "", "", nil, by)
-			}()
+			s.endLater(r, Canceled, "", "", by)
 			continue
 		}
 		if s.total >= s.MaxRuns {
@@ -357,6 +430,13 @@ func (s *Supervisor) schedule() {
 		}
 		if s.running[r.roleKey()] >= s.concurrency(r) {
 			i++
+			continue
+		}
+		// stale is checked again when a run would start: it may have waited past it (held, or a
+		// long queue); a redispatched run is exempt
+		if old, ok := s.tooOld(r); ok {
+			s.queue = append(s.queue[:i], s.queue[i+1:]...)
+			s.endLater(r, Rejected, "stale", old, "")
 			continue
 		}
 		s.queue = append(s.queue[:i], s.queue[i+1:]...)
@@ -702,6 +782,11 @@ func (s *Supervisor) end(r *Record, state, reason, detail string, exit *int, by 
 		data["attempt"] = strconv.Itoa(r.Attempt)
 	case Canceled:
 		data["by"] = by
+	case Rejected:
+		data["reason"], data["event"] = reason, r.Event
+		if detail != "" {
+			data["detail"] = harness.Cut(detail, 500)
+		}
 	}
 	retry := state == Failed && reason == "exit" && r.Attempt <= r.Retries && s.ctx.Err() == nil
 	if retry {
@@ -711,6 +796,9 @@ func (s *Supervisor) end(r *Record, state, reason, detail string, exit *int, by 
 	s.emit(r, "run."+state, data)
 	s.Logf("run %s (%s) %s%s", r.ID, r.Rule, state, map[bool]string{true: " (" + reason + ")", false: ""}[reason != ""])
 	if !retry {
+		s.mu.Lock()
+		delete(s.unended, r.ruleKey()+"|"+r.Event)
+		s.mu.Unlock()
 		return
 	}
 	delay := s.RetryDelay(r.Attempt)

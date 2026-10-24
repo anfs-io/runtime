@@ -178,8 +178,9 @@ func daemon(logf func(string, ...any)) int {
 		logf("runs: %v", err)
 		return 1
 	}
-	d := &dispatch.Dispatcher{Sup: sup, Load: discover, Logf: logf}
+	d := &dispatch.Dispatcher{Sup: sup, Load: discover, Logf: logf, RedispatchDir: filepath.Join(cfg.Paths.State, "redispatch")}
 	d.Reload(ctx)
+	d.Redispatch()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); d.Run(ctx, b) }()

@@ -85,7 +85,7 @@ const line = `{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-000000000001","
 
 func (r *rig) submit(rc *Record) {
 	r.t.Helper()
-	if err := r.sup.Submit(rc, []byte(line), "Fix "+rc.Subject+"."); err != nil {
+	if err := r.sup.Submit(rc, []byte(line), "Fix "+rc.Subject+".", ""); err != nil {
 		r.t.Fatal(err)
 	}
 }
@@ -347,8 +347,8 @@ func TestConcurrencyPerRoleAndHost(t *testing.T) {
 	if maxTotal != 2 || maxSolo != 1 {
 		t.Errorf("at most %d working (host 2), %d of solo (1)", maxTotal, maxSolo)
 	}
-	if w, q := r.sup.Counts(); w != 0 || q != 0 {
-		t.Errorf("counts %d %d", w, q)
+	if w, q, h := r.sup.Counts(); w != 0 || q != 0 || h != 0 {
+		t.Errorf("counts %d %d %d", w, q, h)
 	}
 }
 
@@ -485,7 +485,7 @@ func TestGuardsBookkeeping(t *testing.T) {
 	r.start()
 	a := rec("r", "m", "claude", "")
 	r.submit(a)
-	if !r.sup.Has(sid, "r", a.Event) || r.sup.Has(sid, "other", a.Event) {
+	if !r.sup.Seen(sid, "r", a.Event) || r.sup.Seen(sid, "other", a.Event) {
 		t.Error("Has")
 	}
 	if n := r.sup.Starts(sid, "r", time.Now().Add(-time.Minute)); n != 1 {
@@ -636,5 +636,12 @@ func TestGitNoCredentialsAfterTheJobs(t *testing.T) {
 	want := "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/h GIT_TERMINAL_PROMPT=0 GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1="
 	if strings.Join(env, " ") != want {
 		t.Errorf("%v", env)
+	}
+}
+
+func writeCancel(t *testing.T, r *rig, id string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(r.sup.Store.RunDir(id), "cancel"), []byte("shell:person\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

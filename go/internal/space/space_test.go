@@ -56,6 +56,8 @@ dispatch:
     stale: 1h
     retries: 1
     args: [--effort, high]
+    overflow: reject
+    hold: 5
 `
 
 func TestEveryKey(t *testing.T) {
@@ -80,7 +82,7 @@ func TestEveryKey(t *testing.T) {
 	if r.Harness != "claude" || r.Model != "opus" || r.BudgetUSD != 5 || r.Role.Concurrency != 2 || r.Role.Queue != 3 {
 		t.Errorf("role: %+v %+v", r, r.Role)
 	}
-	if r.Timeout != 2*time.Hour || r.Stale != time.Hour || r.Rate != (Rate{5, time.Minute}) || r.Retries != 1 {
+	if r.Timeout != 2*time.Hour || r.Stale != time.Hour || r.Rate != (Rate{5, time.Minute}) || r.Retries != 1 || r.Overflow != "reject" || r.Hold != 5 {
 		t.Errorf("limits: %v %v %v %v", r.Timeout, r.Stale, r.Rate, r.Retries)
 	}
 	if r.Job == nil || r.Job.Name != "fix-{{subject}}" || r.Job.Repos[0] != "core" || r.Address() != "anfs-dev/maintainer" {
@@ -99,7 +101,7 @@ dispatch:
 `), "x", "/x", env(t))
 	r := s.Rules[0]
 	if r.Status != StatusOK || r.Timeout != time.Hour || r.Stale != 24*time.Hour || r.Rate != (Rate{20, time.Hour}) ||
-		r.Retries != 0 || r.Job != nil || r.Role.Concurrency != 1 || r.Role.Queue != 10 || !r.Enabled {
+		r.Retries != 0 || r.Job != nil || r.Role.Concurrency != 1 || r.Role.Queue != 10 || !r.Enabled || r.Overflow != "delay" || r.Hold != 20 {
 		t.Errorf("%s %s %+v %+v", r.Status, r.Reason, r, r.Role)
 	}
 }
@@ -142,6 +144,9 @@ func TestInvalid(t *testing.T) {
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, timeout: soon}`, "timeout:"},
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, rate: lots}`, "starts per window"},
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, retries: 3}`, "retries: 3 is 0 to 2"},
+		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, overflow: drop}`, `overflow: "drop" is delay or reject`},
+		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, hold: 201}`, "hold: 201 is 0 to 200"},
+		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, hold: -1}`, "hold: -1 is 0 to 200"},
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: [--dangerously-skip-permissions]}`, "anfsd never skips permissions"},
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: ["--permission-mode=bypassPermissions"]}`, "anfsd never skips permissions"},
 		{"", `{name: r, on: {type: report.filed}, as: o, prompt: x, args: [--auto]}`, "anfsd never skips permissions"},

@@ -37,6 +37,15 @@ credential files (`sandbox.filesystem.denyRead`) or its own key, and with no net
 `--no-extensions --no-mcp --no-skills --no-prompt-templates --no-approve`; opencode its
 `OPENCODE_DISABLE_*` and `OPENCODE_PURE` (its global config has no switch).
 
+**Backpressure delays, with bounds**: a full queue or a spent `rate:` holds a run (submitted, with
+`held: rate|queue`; `run.submitted` says so) instead of rejecting it, unless the rule says
+`overflow: reject`; at most `hold:` (20) runs per rule, beyond that `run.rejected` (`hold: 20
+full`). Held runs leave hold oldest first when the queue has room and the rule's window frees a
+start (one timer per rule while it holds runs), survive a restart (they are records), and are
+checked against `stale` again when they would start. `rate:` counts runs as they enter the queue.
+An event rejected for `queue` or `rate` is unhandled; `anfs agents redispatch` leaves a request in
+`~/.local/state/anfsd/redispatch/` and sends SIGHUP: the run skips stale, rate and loop.
+
 And **the podman follower** (agents/02c): one child, `podman events --format json --filter
 type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,
 died, removed, paused, unpaused, a change of health; a pod's created, started, stopped, removed)

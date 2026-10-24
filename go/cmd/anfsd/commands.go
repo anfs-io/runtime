@@ -110,6 +110,8 @@ type ruleRow struct {
 	Harness  string   `json:"harness"`
 	Job      string   `json:"job"`
 	Enabled  bool     `json:"enabled"`
+	Overflow string   `json:"overflow"` // delay or reject (02d)
+	Hold     int      `json:"hold"`
 	Reason   string   `json:"reason"`
 	Warnings []string `json:"warnings"`
 	File     string   `json:"file"`
@@ -136,7 +138,8 @@ func onString(r *space.Rule) string {
 
 func rowOf(r *space.Rule) ruleRow {
 	row := ruleRow{Rule: r.Name, Status: r.Status, Space: r.Space.Path, SpaceID: r.Space.ID, On: onString(r),
-		As: r.As, Harness: r.Harness, Enabled: r.Enabled, Reason: r.Reason, Warnings: r.Warnings, File: r.Space.File}
+		As: r.As, Harness: r.Harness, Enabled: r.Enabled, Reason: r.Reason, Warnings: r.Warnings, File: r.Space.File,
+		Overflow: r.Overflow, Hold: r.Hold}
 	if row.Warnings == nil {
 		row.Warnings = []string{}
 	}
@@ -196,7 +199,7 @@ type matchRow struct {
 	Rule    string   `json:"rule"`
 	Status  string   `json:"status"` // the rule's
 	Space   string   `json:"space"`
-	Result  string   `json:"result"` // no match, submit, reject, duplicate, disabled, invalid
+	Result  string   `json:"result"` // no match, submit, hold, reject, duplicate, disabled, invalid
 	Why     string   `json:"why"`
 	Job     string   `json:"job"`
 	Repos   []string `json:"repos"`
@@ -316,13 +319,15 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				row.Result, row.Why = "duplicate", "this rule already has a run for this event"
 			case dec.Action == "rejected":
 				row.Result, row.Why = "reject", dec.Reason+": "+dec.Detail
+			case dec.Action == "held":
+				row.Result, row.Why = "hold", dec.Reason+": "+dec.Detail+" (submitted and held; it starts when it may)"
 			default:
 				row.Result = "submit"
 				if dec.Action == "disabled" {
 					row.Result, row.Why = "disabled", "would submit, but the rule has enabled: false"
 				}
 			}
-			if dec.Record != nil && (row.Result == "submit" || row.Result == "disabled" || row.Result == "reject") {
+			if dec.Record != nil && (row.Result == "submit" || row.Result == "hold" || row.Result == "disabled" || row.Result == "reject") {
 				fillPlan(&row, dec, line, cfg.Settings.ClaudeBare)
 			}
 			rows = append(rows, row)
