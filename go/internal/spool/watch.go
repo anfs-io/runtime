@@ -33,6 +33,9 @@ func Watch(ctx context.Context, dir string, every time.Duration, logf func(strin
 	}
 	w := &Watcher{C: make(chan struct{}, 1), dir: dir, every: every, logf: logf, w: fw, watched: map[string]bool{}}
 	w.add()
+	// a look at once: what was written before the watches were in place raises no event (a run's
+	// harness may write its first line before its spool is watched)
+	w.Kick()
 	go w.loop(ctx)
 	return w, nil
 }

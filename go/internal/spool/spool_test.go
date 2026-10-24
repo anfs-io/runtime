@@ -146,7 +146,7 @@ func TestReadMax(t *testing.T) {
 	}
 }
 
-// The watcher wakes on an append to an existing file and on a new scope; a burst is one wake-up
+// The watcher wakes once at its start, on an append to an existing file and on a new scope; a burst is one wake-up
 func TestWatch(t *testing.T) {
 	ev := t.TempDir()
 	appendTo(t, filepath.Join(ev, "host", "2026-10.jsonl"), "a\n")
@@ -174,6 +174,7 @@ func TestWatch(t *testing.T) {
 			}
 		}
 	}
+	wait("what was there before the watch (a run's first line, written before its spool is watched)")
 	drain()
 	appendTo(t, filepath.Join(ev, "host", "2026-10.jsonl"), "b\n")
 	wait("an append")
