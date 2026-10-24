@@ -112,7 +112,7 @@ func TestMatchCommand(t *testing.T) {
 	}
 	s := out.String()
 	for _, want := range []string{
-		"event: report.filed r-20261023-9 in anfs-dev by shell:",
+		"event: report.filed r-20261023-9 in anfs-dev by shell",
 		"anfs-dev/fix-core-report (ok): submit",
 		"job:     anfs work new fix-r-20261023-9 core",
 		"command: claude -p --output-format stream-json --verbose --permission-mode dontAsk --settings '<run dir>/claude.json' --setting-sources= --strict-mcp-config ",

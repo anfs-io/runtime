@@ -261,7 +261,10 @@ func matchEvent(o *opts, stdin io.Reader, spaces []*space.Space) ([]byte, cloude
 			return nil, cloudevent.Event{}, fmt.Errorf("--space %s: no space with that path or id among the rules' spaces", sp)
 		}
 	}
-	actor := "shell:" + os.Getenv("USER")
+	actor := "shell"
+	if u := os.Getenv("USER"); u != "" {
+		actor += ":" + u
+	}
 	if a := o.value("--actor"); a != "" {
 		actor = a
 	}

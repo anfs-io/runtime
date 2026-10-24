@@ -39,4 +39,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/* --title "anfsd $TAG" --notes "anfsd $TAG: see SHA256SUMS; core/anfsd pins these."
+        run: |
+          gh release create "$TAG" dist/* --title "anfsd $TAG" --notes "anfsd $TAG: see SHA256SUMS; core/anfsd pins these."
