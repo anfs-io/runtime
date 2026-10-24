@@ -278,7 +278,7 @@ func TestRunDispatches(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("exit: %v\n%s", err, stderr.String())
 	}
-	for _, w := range []string{"rules: 1 loaded, 1 disabled, 1 invalid, from 1 spaces", "rule anfs-dev/loop invalid", "consumer anfsd-dispatch: filters anfs.abcde23456.report.filed anfs.host.source.updated", "completed"} {
+	for _, w := range []string{"rules: 1 loaded, 1 disabled, 0 off (dispatcher: none), 1 invalid, from 1 spaces", "rule anfs-dev/loop invalid", "consumer anfsd-dispatch: filters anfs.abcde23456.report.filed anfs.host.source.updated", "completed"} {
 		if !strings.Contains(stderr.String(), w) {
 			t.Errorf("log lacks %q:\n%s", w, stderr.String())
 		}
@@ -412,5 +412,31 @@ dispatch:
 	cmd.Wait()
 	if !strings.Contains(stderr.String(), "redispatch ") || !strings.Contains(stderr.String(), "submitted run ") {
 		t.Errorf("log:\n%s", stderr.String())
+	}
+}
+
+// dispatcher: none (02d): rules says off, match says off and why
+func TestRulesAndMatchOff(t *testing.T) {
+	f := testfake.New(t)
+	f.Setenv(t)
+	dir := installSpace(t, f, f.Home)
+	b, _ := os.ReadFile(filepath.Join(dir, "space.yml"))
+	os.WriteFile(filepath.Join(dir, "space.yml"), append([]byte("dispatcher: none\n"), b...), 0o644)
+	var out, errb bytes.Buffer
+	if c := run([]string{"rules", "--json"}, &out, &errb); c != 0 {
+		t.Fatal(errb.String())
+	}
+	var rows []ruleRow
+	json.Unmarshal(out.Bytes(), &rows)
+	if len(rows) != 3 || rows[0].Status != "off" || rows[0].Reason != "dispatcher: none" || rows[2].Status != "invalid" ||
+		rows[0].Overflow != "delay" || rows[0].Hold != 20 {
+		t.Errorf("%+v", rows)
+	}
+	out.Reset()
+	if c := run([]string{"match", "--type", "report.filed", "--space", "anfs-dev", "--data", "to=file", "--data", "package=core/pcm"}, &out, &errb); c != 0 {
+		t.Fatal(errb.String())
+	}
+	if !strings.Contains(out.String(), "anfs-dev/fix-core-report (off): off: dispatcher: none: anfsd does not dispatch this space") {
+		t.Errorf("%s", out.String())
 	}
 }

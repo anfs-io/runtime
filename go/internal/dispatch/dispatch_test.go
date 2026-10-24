@@ -447,3 +447,37 @@ func TestRedispatch(t *testing.T) {
 		t.Errorf("%d redispatched records", n)
 	}
 }
+
+type cancelLog struct {
+	*supervise.Supervisor
+	calls []string
+}
+
+func (c *cancelLog) CancelUnstarted(spaceID, by string) int {
+	c.calls = append(c.calls, spaceID+" "+by)
+	return 0
+}
+
+// dispatcher: none (02d): the space's rules are not loaded nor in the filters, a matching event
+// starts nothing, and what is not started of it is canceled at the reload
+func TestDispatcherNone(t *testing.T) {
+	r := newRig(t, "dispatcher: none\n"+spaceYML)
+	c := &cancelLog{Supervisor: r.sup}
+	r.d.Sup = c
+	r.d.Reload(context.Background())
+	if len(r.d.Rules()) != 0 || strings.Join(r.d.Filters(), " ") != SourceUpdated {
+		t.Errorf("rules %v filters %v", r.d.Rules(), r.d.Filters())
+	}
+	if ds, _ := r.d.Handle(filed(t, r, "r-1", "shell:me", 0)); len(ds) != 0 {
+		t.Errorf("%s", actions(ds))
+	}
+	if strings.Join(c.calls, ",") != sid+" dispatcher:none" {
+		t.Errorf("cancel calls %v", c.calls)
+	}
+	// redispatch refuses it
+	r.d.RedispatchDir = filepath.Join(t.TempDir(), "rd")
+	request(t, r.d.RedispatchDir, filed(t, r, "r-2", "shell:me", 0), "fix-core-report", false)
+	if got := r.d.Redispatch(); len(got) != 1 || !strings.Contains(got[0], "refused: the space's dispatcher is none") {
+		t.Errorf("%v", got)
+	}
+}

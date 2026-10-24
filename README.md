@@ -46,6 +46,11 @@ checked against `stale` again when they would start. `rate:` counts runs as they
 An event rejected for `queue` or `rate` is unhandled; `anfs agents redispatch` leaves a request in
 `~/.local/state/anfsd/redispatch/` and sends SIGHUP: the run skips stale, rate and loop.
 
+**A space can turn anfsd's dispatcher off**: `dispatcher: none` in its `space.yml` (absent:
+`anfsd`). Its rules are still parsed and shown (status `off`), never loaded nor in the consumer's
+filters; its queued and held runs end `run.canceled by=dispatcher:none` at the reload, working
+runs go on, and `redispatch` refuses it. The shipper and the report sink are unaffected.
+
 And **the podman follower** (agents/02c): one child, `podman events --format json --filter
 type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,
 died, removed, paused, unpaused, a change of health; a pod's created, started, stopped, removed)

@@ -290,6 +290,45 @@ func (s *Supervisor) full(k string, concurrency, queue int) bool {
 	return w >= queue
 }
 
+// CancelUnstarted ends every run of the space that has not started (queued or held) as canceled
+// by by: their cancel marker, then the scheduler ends them. Working runs go on. The number marked.
+func (s *Supervisor) CancelUnstarted(spaceID, by string) int {
+	s.mu.Lock()
+	if s.ctx == nil { // only opened (anfsd match): it writes nothing
+		s.mu.Unlock()
+		return 0
+	}
+	var marked []*Record
+	for _, r := range s.queue {
+		if r.SpaceID == spaceID {
+			marked = append(marked, r)
+		}
+	}
+	for _, h := range s.held {
+		for _, r := range h {
+			if r.SpaceID == spaceID {
+				marked = append(marked, r)
+			}
+		}
+	}
+	s.mu.Unlock()
+	n := 0
+	for _, r := range marked {
+		if _, ok := s.Store.Canceled(r.ID); ok {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(s.Store.RunDir(r.ID), "cancel"), []byte(by+"\n"), 0o600); err != nil {
+			s.Logf("run %s: cancel marker: %v", r.ID, err)
+			continue
+		}
+		n++
+	}
+	if n > 0 {
+		s.signal()
+	}
+	return n
+}
+
 // Counts is how many runs are working, waiting in a queue, and held (anfs bus status reads the
 // records instead).
 func (s *Supervisor) Counts() (working, queued, held int) {

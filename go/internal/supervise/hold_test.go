@@ -165,3 +165,34 @@ func TestHeldCanceled(t *testing.T) {
 	}
 	r.waitState(a.ID, Completed, 5*time.Second)
 }
+
+// dispatcher: none at a reload: the space's queued and held runs end canceled
+// (by=dispatcher:none), a working one goes on, another space's are untouched
+func TestCancelUnstarted(t *testing.T) {
+	r := newRig(t, 1)
+	r.f.Mode("sleep 1")
+	r.start()
+	w := rec("r", "m", "claude", "")
+	w.SpaceDir = r.f.Home
+	r.submit(w)
+	r.waitState(w.ID, Working, 5*time.Second)
+	q := rec("r", "m", "claude", "")
+	q.SpaceDir = r.f.Home
+	r.submit(q)
+	h := heldRec("r", "rate")
+	h.SpaceDir = r.f.Home
+	r.submit(h)
+	o := rec("r", "m", "claude", "")
+	o.SpaceID, o.SpaceDir = "zzzzz23456", r.f.Home
+	r.submit(o)
+	if n := r.sup.CancelUnstarted(sid, "dispatcher:none"); n != 2 {
+		t.Errorf("%d marked", n)
+	}
+	for _, id := range []string{q.ID, h.ID} {
+		if d := r.waitState(id, Canceled, 5*time.Second); d.By != "dispatcher:none" || d.Started != "" {
+			t.Errorf("%+v", d)
+		}
+	}
+	r.waitState(w.ID, Completed, 5*time.Second)
+	r.waitState(o.ID, Completed, 10*time.Second)
+}

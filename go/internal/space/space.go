@@ -44,6 +44,14 @@ const (
 	StatusDisabled   = "disabled"
 	StatusUnenforced = "unenforced" // pi: no permission system
 	StatusPartial    = "partial"    // opencode, antigravity: no read/write split
+	StatusOff        = "off"        // valid, but the space's dispatcher: is none (02d)
+)
+
+// Dispatchers a space's dispatcher: may name (02d): anfsd (the default) or none, which leaves the
+// space's rules unloaded for another tool to act on. When the tools: slots arrive it moves there.
+const (
+	DispatcherAnfsd = "anfsd"
+	DispatcherNone  = "none"
 )
 
 // Defaults and limits of a rule.
@@ -162,6 +170,8 @@ type Space struct {
 	Roles  map[string]*Role
 	Rules  []*Rule
 	Err    error // the file could not be read or parsed: no rule loads
+	// Dispatcher is who acts on the space's rules: anfsd, or none (its rules are shown, off)
+	Dispatcher string
 }
 
 // Env is what validation needs of the host: HOME, the environment, and which programs exist.
@@ -255,7 +265,20 @@ func parse(s *Space, b []byte, env Env) *Space {
 			s.Err = fmt.Errorf("id %q is not 10 of a-z0-9", s.ID)
 		}
 	}
+	s.Dispatcher = DispatcherAnfsd
+	var dispErr error
+	if n := m["dispatcher"]; n != nil {
+		switch {
+		case n.Kind == yaml.ScalarNode && (n.Value == DispatcherAnfsd || n.Value == DispatcherNone):
+			s.Dispatcher = n.Value
+		default:
+			dispErr = fmt.Errorf("dispatcher: %q is anfsd or none (another tool's name waits for the tools: slots; until then, none)", n.Value)
+		}
+	}
 	accessErr := s.parseAccess(m["access"], env)
+	if accessErr == nil {
+		accessErr = dispErr
+	}
 	rolesErr := s.parseRoles(m["agents"], env)
 	s.parseRules(m["dispatch"], env, accessErr, rolesErr)
 	return s
@@ -434,6 +457,8 @@ func (s *Space) parseRules(n *yaml.Node, env Env, accessErr, rolesErr error) {
 			continue
 		}
 		switch {
+		case s.Dispatcher == DispatcherNone:
+			r.Status, r.Reason = StatusOff, "dispatcher: none"
 		case !r.Enabled:
 			r.Status = StatusDisabled
 		case r.Harness == "pi":

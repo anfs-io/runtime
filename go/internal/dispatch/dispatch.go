@@ -46,6 +46,7 @@ type Submitter interface {
 	SetConcurrency(spaceID, role string, n int)
 	Submit(r *supervise.Record, eventLine []byte, prompt, detail string) error
 	Reject(r *supervise.Record, eventLine []byte, reason, detail string) error
+	CancelUnstarted(spaceID, by string) int
 }
 
 // Dispatcher matches events to rules. Fill the fields, Reload, then Handle each event (Run does
@@ -87,10 +88,16 @@ func (d *Dispatcher) Reload(ctx context.Context) error {
 	}
 	var loaded []*space.Rule
 	paths := map[string]string{}
-	invalid, disabled := 0, 0
+	invalid, disabled, off := 0, 0, 0
 	for _, s := range spaces {
 		if s.ID != "" {
 			paths[s.ID] = s.Path
+		}
+		if s.Dispatcher == space.DispatcherNone && s.ID != "" {
+			// another tool dispatches it: what is queued or held of it ends; working runs go on
+			if n := d.Sup.CancelUnstarted(s.ID, "dispatcher:none"); n > 0 {
+				d.logf("space %s: dispatcher: none, %d runs not started canceled", s.Path, n)
+			}
 		}
 		for _, r := range s.Rules {
 			switch {
@@ -101,6 +108,8 @@ func (d *Dispatcher) Reload(ctx context.Context) error {
 				}
 			case r.Status == space.StatusDisabled:
 				disabled++
+			case r.Status == space.StatusOff:
+				off++
 			default:
 				invalid++
 				d.logf("rule %s/%s invalid, not loaded: %s", s.Path, r.Name, r.Reason)
@@ -115,7 +124,7 @@ func (d *Dispatcher) Reload(ctx context.Context) error {
 	d.mu.Lock()
 	d.spaces, d.rules, d.paths = spaces, loaded, paths
 	d.mu.Unlock()
-	d.logf("rules: %d loaded, %d disabled, %d invalid, from %d spaces", len(loaded), disabled, invalid, len(spaces))
+	d.logf("rules: %d loaded, %d disabled, %d off (dispatcher: none), %d invalid, from %d spaces", len(loaded), disabled, off, invalid, len(spaces))
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package space
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,5 +337,27 @@ EOF
 	}
 	if _, err := Discover(t.Context(), filepath.Join(bin, "nope"), env(t)); err == nil {
 		t.Error("no wsm: no error")
+	}
+}
+
+// dispatcher: none (02d): the rules are parsed and validated, shown off, never loaded; anything
+// but anfsd or none makes the space's rules invalid
+func TestDispatcherNone(t *testing.T) {
+	e := env(t)
+	yml := "id: abcde23456\n%s\nagents: {m: {harness: claude}}\ndispatch:\n  - {name: r, on: {type: report.filed}, as: m, prompt: hi}\n  - {name: bad, on: {type: run.failed}, as: m, prompt: hi}\n"
+	s := Parse([]byte(fmt.Sprintf(yml, "dispatcher: none")), "x", "/x", e)
+	if s.Dispatcher != DispatcherNone || s.Rules[0].Status != StatusOff || s.Rules[0].Reason != "dispatcher: none" || s.Rules[0].Loaded() ||
+		s.Rules[1].Status != StatusInvalid {
+		t.Errorf("%s %+v %+v", s.Dispatcher, s.Rules[0], s.Rules[1])
+	}
+	if s := Parse([]byte(fmt.Sprintf(yml, "dispatcher: anfsd")), "x", "/x", e); s.Rules[0].Status != StatusOK {
+		t.Errorf("%+v", s.Rules[0])
+	}
+	if s := Parse([]byte(fmt.Sprintf(yml, "")), "x", "/x", e); s.Dispatcher != DispatcherAnfsd || s.Rules[0].Status != StatusOK {
+		t.Errorf("%s %+v", s.Dispatcher, s.Rules[0])
+	}
+	s = Parse([]byte(fmt.Sprintf(yml, "dispatcher: firstmate")), "x", "/x", e)
+	if s.Rules[0].Status != StatusInvalid || !strings.Contains(s.Rules[0].Reason, `dispatcher: "firstmate" is anfsd or none`) {
+		t.Errorf("%+v", s.Rules[0])
 	}
 }

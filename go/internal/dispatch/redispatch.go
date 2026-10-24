@@ -113,6 +113,8 @@ func (d *Dispatcher) redispatchFile(p string) []string {
 func (d *Dispatcher) redispatchRule(r *space.Rule, ev cloudevent.Event, line []byte, q Request) string {
 	sid := r.Space.ID
 	switch {
+	case r.Status == space.StatusOff:
+		return "refused: the space's dispatcher is none (another tool dispatches it)"
 	case r.Status == space.StatusDisabled:
 		return "refused: the rule is disabled (enabled: false)"
 	case !r.Loaded():

@@ -199,7 +199,7 @@ type matchRow struct {
 	Rule    string   `json:"rule"`
 	Status  string   `json:"status"` // the rule's
 	Space   string   `json:"space"`
-	Result  string   `json:"result"` // no match, submit, hold, reject, duplicate, disabled, invalid
+	Result  string   `json:"result"` // no match, submit, hold, reject, duplicate, disabled, off, invalid
 	Why     string   `json:"why"`
 	Job     string   `json:"job"`
 	Repos   []string `json:"repos"`
@@ -308,6 +308,15 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			row := matchRow{Rule: r.Name, Status: r.Status, Space: s.Path, Harness: r.Harness, Repos: []string{}, Argv: []string{}, Env: []string{}, Passed: []string{}}
 			if r.Status == space.StatusInvalid {
 				row.Result, row.Why = "invalid", r.Reason
+				rows = append(rows, row)
+				continue
+			}
+			if r.Status == space.StatusOff {
+				// the space's dispatcher: is none: anfsd never acts on it (02d)
+				row.Result, row.Why = "off", "dispatcher: none: anfsd does not dispatch this space"
+				if !r.Matches(ev, d.SpacePath(ev.Scope)) {
+					row.Why += " (and it would not match)"
+				}
 				rows = append(rows, row)
 				continue
 			}

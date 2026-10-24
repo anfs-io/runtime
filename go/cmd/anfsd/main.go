@@ -54,7 +54,7 @@ Usage:
   anfsd rules [--json] [space.yml...]
                      every rule of the installed spaces (wsm ls --json), or of the
                      files named: RULE STATUS SPACE ON AS HARNESS (ok, invalid,
-                     disabled, unenforced, partial); the reason in --json
+                     disabled, unenforced, partial, off); the reason in --json
   anfsd match [--json] (--event FILE|- | --type T [--subject S] [--data K=V]...
               [--space SPACE]) [space.yml...]
                      what each rule would do with the event: no match (and why),

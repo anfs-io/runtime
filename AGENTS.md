@@ -19,11 +19,14 @@ go/internal/shipper          spool -> bus: batches of 256, a token bucket per sc
 go/internal/space            space.yml's access:, agents:, dispatch: (the one parser: validation, templates,
                              matching, filter subjects); Discover: the installed spaces (wsm ls --json)
 go/internal/dispatch         the consumer anfsd-dispatch: rules loaded, events matched, the guards (stale,
-                             rate, queue, loop), one run per rule and event id; Decide (anfsd match)
+                             loop, then rate and queue: held under overflow: delay, up to hold:), one
+                             record per rule and event id; Decide (anfsd match); redispatch requests;
+                             a space's dispatcher: none
 go/internal/supervise        the runs: records (runs/<id>/run.json), the queue, slots per role and host,
                              start (anfs work new/env, setsid, a wrapper that keeps the exit status),
                              timeout, cancel marker, adoption after a restart, run.* events; the
-                             run's environment (env.go: the allow-list); its spool (ingest.go)
+                             run's environment (env.go: the allow-list); its spool (ingest.go); held
+                             runs and their rate timers (hold.go)
 go/internal/harness          one file per harness: claude, opencode, pi, antigravity (argv, env, files),
                              the summary of a run's output, the text of its stream
 go/internal/sink             the consumer anfsd-sink-report: anfs report __sink per report.* event
@@ -68,6 +71,9 @@ go/test/e2e.bats             the real nats-server and the built anfsd in a temp 
   into the log (`supervise/ingest.go`, `cloudevent.StampLine`); its environment is the allow-list
   in `supervise/env.go` (a new name passes only by a decision in a plan). `testfake`'s harness and
   anfs find their directories beside `HOME`, since `FAKE_*` do not pass the list either.
+- **Held runs never poll**: they leave hold on the scheduler's wake-ups and one timer per rule
+  while its rate holds them (`supervise/hold.go`); `cmd/anfsd`'s test holds anfsd under 0.2 s of
+  CPU in 10 s with a run held on a rate timer.
 - **No spinning on a failing harness**: a run is never restarted but for `retries:` (at most 2,
   30 s then 2 min apart), and `rate:` caps starts per rule; the adopted runs' 10 s check runs only
   while one is adopted.
