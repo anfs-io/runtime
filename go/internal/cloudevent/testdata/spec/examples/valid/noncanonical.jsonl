@@ -1,0 +1,1 @@
+{"specversion": "1.0", "id": "01a16d51-8369-7f12-9119-79a1d496db6f", "source": "/anfs/host", "type": "io.anfs.source.updated", "subject": "stack", "time": "2026-10-24T09:50:21.033Z", "datacontenttype": "application/json", "actor": "shell:roberto", "anfsv": 1, "data": {"from": "1f0c2a9", "to": "8e7d6b5"}}

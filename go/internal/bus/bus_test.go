@@ -97,7 +97,7 @@ func TestPublishDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		f, err := b.Publish("anfs.host.x.y", []byte(`{"a":1}`), "id-1")
+		f, err := b.Publish("anfs.host.anfs.x.y", []byte(`{"a":1}`), "id-1")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestPublishDedup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Header.Get(nats.MsgIdHdr) != "id-1" || m.Header.Get("Content-Type") != "application/cloudevents+json" || m.Subject != "anfs.host.x.y" {
+	if m.Header.Get(nats.MsgIdHdr) != "id-1" || m.Header.Get("Content-Type") != "application/cloudevents+json" || m.Subject != "anfs.host.anfs.x.y" {
 		t.Errorf("message %+v", m)
 	}
 }

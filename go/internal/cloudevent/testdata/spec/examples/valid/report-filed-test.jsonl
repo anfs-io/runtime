@@ -1,0 +1,1 @@
+{"specversion":"1.0","id":"01a169de-e9b4-7252-834c-d87d05524998","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-1","time":"2026-10-23T17:46:18.932Z","datacontenttype":"application/json","actor":"shell:t","anfsv":1,"data":{"title":"a \"q\" \\ x\ttab","package":"core/pcm"}}

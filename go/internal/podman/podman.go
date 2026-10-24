@@ -1,6 +1,6 @@
 // Package podman follows `podman events` and writes what containers and pods do into the host
 // scope of the event log (through cloudevent.Append, like every event of anfsd's), so the shipper
-// puts them on the bus as anfs.host.container.<verb> and anfs.host.pod.<verb>.
+// puts them on the bus as anfs.host.anfs.container.<verb> and anfs.host.anfs.pod.<verb>.
 //
 // One child, `podman events --format json --filter type=container --filter type=pod` (no --since:
 // from now), one JSON object a line. Kept: a container's create, start, stop, died, remove, pause,

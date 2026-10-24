@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/anfs-io/events/v1.0.0/schema/event.v1.json",
+  "title": "anfs event, profile v1 (anfsv 1)",
+  "description": "One CloudEvents 1.0 event in the structured JSON format, as SPEC.md profiles it. The schema checks every rule a JSON Schema can; the line rules (size, one line, time equal to the id's milliseconds, integers in data within 2^53 - 1, unique members, actorclaimed differing from the actor, the canonical form) are SPEC.md's and the validators'. Patterns use the subset of ECMA-262 that Go's regexp, Python's re and Ruby's Regexp read alike: no lookaround, no backreferences, and control characters written as JSON \\u escapes (so the pattern holds the characters themselves, not a regex escape).",
+  "type": "object",
+  "required": ["specversion", "id", "source", "type", "time", "datacontenttype", "actor", "anfsv", "data"],
+  "propertyNames": { "pattern": "^[a-z0-9]{1,20}$" },
+  "properties": {
+    "specversion": { "const": "1.0" },
+    "id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "source": { "type": "string", "pattern": "^/[a-z][a-z0-9-]*/(host|spaces/[a-z0-9]{10})(/[A-Za-z0-9._~-]+)*$" },
+    "type": { "type": "string", "pattern": "^io\\.[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+    "subject": { "$ref": "#/$defs/text", "minLength": 1 },
+    "time": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$" },
+    "datacontenttype": { "const": "application/json" },
+    "dataschema": { "$ref": "#/$defs/text" },
+    "actor": { "$ref": "#/$defs/actor" },
+    "actorclaimed": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[a-z][a-z0-9-]*(:[^\u0000-\u0020\u007f-\u009f]+)?( as ([a-z0-9]{10})?/[a-z0-9][a-z0-9._-]*)?$"
+    },
+    "actorspace": { "type": "string", "pattern": "^[a-z0-9]{10}$" },
+    "actorrole": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "actorrun": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" },
+    "spacepath": { "$ref": "#/$defs/text", "minLength": 1 },
+    "traceparent": {
+      "type": "string",
+      "pattern": "^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$",
+      "not": { "pattern": "^00-(0{32}-[0-9a-f]{16}|[0-9a-f]{32}-0{16})-" }
+    },
+    "tracestate": { "type": "string", "pattern": "^[ -~]{1,512}$" },
+    "commitment": { "enum": ["confirmed", "finalized"] },
+    "anfsv": { "const": 1 },
+    "data": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+    }
+  },
+  "additionalProperties": { "$ref": "#/$defs/extension" },
+  "dependentRequired": {
+    "actorspace": ["actorrole"],
+    "tracestate": ["traceparent"]
+  },
+  "dependentSchemas": {
+    "commitment": {
+      "properties": { "type": { "pattern": "^io\\.lgat\\." } }
+    }
+  },
+  "if": {
+    "required": ["type"],
+    "properties": { "type": { "type": "string", "pattern": "^io\\.anfs\\." } }
+  },
+  "then": {
+    "properties": {
+      "data": { "additionalProperties": { "type": "string" } }
+    }
+  },
+  "$defs": {
+    "text": {
+      "description": "A CloudEvents String: no U+0000-U+001F or U+007F-U+009F.",
+      "type": "string",
+      "pattern": "^[^\u0000-\u001f\u007f-\u009f]*$"
+    },
+    "actor": {
+      "description": "<kind>[:<name>]: the kind lower-case, the name any characters but spaces and control characters. At most 128 bytes (the schema counts characters; a validator counts bytes).",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9-]*(:[^\u0000-\u0020\u007f-\u009f]+)?$"
+    },
+    "extension": {
+      "description": "An extension no registry entry above names: a CloudEvents String, Integer (32-bit) or Boolean.",
+      "oneOf": [
+        { "$ref": "#/$defs/text" },
+        { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+        { "type": "boolean" }
+      ]
+    }
+  }
+}

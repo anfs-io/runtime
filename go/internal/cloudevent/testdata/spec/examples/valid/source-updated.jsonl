@@ -1,0 +1,1 @@
+{"specversion":"1.0","id":"01a169de-e9bb-79f5-bfa5-af74f79afa6e","source":"/anfs/host","type":"io.anfs.source.updated","subject":"core","time":"2026-10-23T17:46:18.939Z","datacontenttype":"application/json","actor":"shell:unknown","anfsv":1,"data":{"from":"aaa","to":"bbb"}}

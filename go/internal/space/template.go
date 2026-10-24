@@ -124,8 +124,11 @@ func SpecMatches(spec string, own *Space, scope, spacePath string) bool {
 	return spacePath == spec
 }
 
-// FilterSubject is the NATS subject the rule needs from the stream: anfs.<scope>.<the type's
-// literal tokens>, ending in > once the glob has a wildcard (the globs are matched in Go).
+// FilterSubject is the NATS subject the rule needs from the stream: anfs.<scope>., the type's
+// namespace, then the glob's literal tokens, ending in > once the glob has a wildcard (the globs
+// are matched in Go). The subject is the type without io. (SPEC.md §5), so an anfs short type
+// gets its namespace back (report.* is anfs.<id>.anfs.report.>) and another namespace's has it
+// already (cnfs.* is anfs.<id>.cnfs.>); a glob whose first token is a wildcard is anfs.<id>.>.
 func (r *Rule) FilterSubject() string {
 	scope := r.Space.ID
 	if r.On.Space != "" {
@@ -142,6 +145,9 @@ func (r *Rule) FilterSubject() string {
 		lit = append(lit, t)
 	}
 	s := "anfs." + scope
+	if len(lit) > 0 && !cloudevent.IsNamespace(lit[0]) {
+		lit = append([]string{"anfs"}, lit...)
+	}
 	if len(lit) > 0 {
 		s += "." + strings.Join(lit, ".")
 	}

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anfs-io/runtime/go/internal/cloudevent"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -499,7 +500,9 @@ func (s *Space) parseRule(r *Rule, n *yaml.Node, env Env) error {
 	if err := strictDecode(&raw.On, &on); err != nil {
 		return fmt.Errorf("on: %v", err)
 	}
-	on.Type = strings.TrimPrefix(on.Type, "io.anfs.")
+	// the short type (anfs-io/events SPEC.md §2): io.anfs.report.* and anfs.report.* are
+	// report.*, io.cnfs.x.* is cnfs.x.*
+	on.Type = cloudevent.NormalShort(on.Type)
 	if on.Type == "" {
 		return errors.New("on.type: is required (a glob on the short type: report.filed, report.*)")
 	}

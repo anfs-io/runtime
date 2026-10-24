@@ -85,7 +85,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-// each report.* event on anfs report __sink's stdin, in order; other events never
+// each io.anfs report.* event on anfs report __sink's stdin, in order; other events never
 func TestRendersEachReportEvent(t *testing.T) {
 	f, b, ctx := setup(t)
 	g := &logs{}
@@ -97,6 +97,11 @@ func TestRendersEachReportEvent(t *testing.T) {
 	})
 	l1 := publish(t, ctx, b, "report.filed", "r-1")
 	publish(t, ctx, b, "source.updated", "core")
+	// another namespace's report, and an anfs report on the old shape's subject: not the sink's
+	publish(t, ctx, b, "cnfs.partitia.report.filed", "4182")
+	if _, err := b.JetStream().Publish(ctx, "anfs.abcde23456.report.filed", l1); err != nil {
+		t.Fatal(err)
+	}
 	l2 := publish(t, ctx, b, "report.closed", "r-1")
 	waitFor(t, "two renders", func() bool { return len(sinkCalls(f)) == 2 })
 	time.Sleep(200 * time.Millisecond)

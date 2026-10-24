@@ -32,7 +32,7 @@ import (
 const Consumer = "anfsd-dispatch"
 
 // SourceUpdated is always in the filter: a source that moved may bring new rules.
-const SourceUpdated = "anfs.host.source.updated"
+const SourceUpdated = "anfs.host.anfs.source.updated"
 
 // Submitter is what the dispatcher needs of the supervisor.
 type Submitter interface {

@@ -1,5 +1,5 @@
 // Package sink renders the report records into the report file (BACKLOG.md as a view): anfsd's
-// durable consumer anfsd-sink-report (anfs.*.report.>) hands each event, one at a time, to
+// durable consumer anfsd-sink-report (anfs.*.anfs.report.>) hands each event, one at a time, to
 // `anfs report __sink` (core's plumbing) on stdin. anfsd knows nothing of the file: the render is
 // core's, idempotent, under its own lock. A failure is delivered again, at most 5 times in all,
 // then logged and dropped (the record is still there; the next report.* of it renders it, and so
@@ -22,7 +22,7 @@ import (
 const Consumer = "anfsd-sink-report"
 
 // Filter is what it consumes.
-const Filter = "anfs.*.report.>"
+const Filter = "anfs.*.anfs.report.>"
 
 // MaxDeliver is how often an event is tried in all.
 const MaxDeliver = 5

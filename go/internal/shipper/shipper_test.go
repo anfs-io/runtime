@@ -156,12 +156,12 @@ func TestShipsEach(t *testing.T) {
 		got[m.Header.Get(nats.MsgIdHdr)] = m.Subject
 	}
 	for _, id := range hostIDs {
-		if got[id] != "anfs.host.report.filed" {
+		if got[id] != "anfs.host.anfs.report.filed" {
 			t.Fatalf("%s on %q", id, got[id])
 		}
 	}
 	for _, id := range spaceIDs {
-		if got[id] != "anfs."+space+".report.filed" {
+		if got[id] != "anfs."+space+".anfs.report.filed" {
 			t.Fatalf("%s on %q", id, got[id])
 		}
 	}
@@ -354,5 +354,64 @@ func TestForeignStreamStops(t *testing.T) {
 	}
 	if n := r.log.count("another stream holds anfs.>: OTHER"); n != 1 {
 		t.Fatalf("said %d times: %v", n, r.log.lines)
+	}
+}
+
+// Any layer's event ships on anfs.<scope>.<type without io.>: an io.cnfs line with nested data
+// (the spec's example) on anfs.<id>.cnfs...., an io.anfs one on anfs.<id>.anfs....; a line in
+// another scope's directory is said once for its file and shipped by its source; the recorder's
+// <YYYY-MM>.bus.jsonl is never read
+func TestShipsOtherLayersAndMisfiled(t *testing.T) {
+	r := newRig(t)
+	ex := func(f string) []byte {
+		b, err := os.ReadFile(filepath.Join("..", "cloudevent", "testdata", "spec", "examples", "valid", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	put := func(rel string, lines ...[]byte) {
+		p := filepath.Join(r.events, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range lines {
+			f.Write(l)
+		}
+		f.Close()
+	}
+	cnfs, anfs, lgat := ex("cnfs-partitia-report-filed.jsonl"), ex("report-closed.jsonl"), ex("lgat-payment-finalized.jsonl")
+	put("m2vq7cfr4k/2026-10.jsonl", cnfs)
+	put("tkj76y3nfx/2026-10.jsonl", anfs)
+	// two lines of q7mwx4ne2r's in the host directory; a recorded line beside the spool's
+	put("host/2026-10.jsonl", lgat, ex("lgat-payment-confirmed.jsonl"))
+	put("host/2026-10.bus.jsonl", ex("cnfs-host.jsonl"))
+	if n := r.drain(); n != 4 {
+		t.Fatalf("shipped %d", n)
+	}
+	c := context.Background()
+	st, _ := r.bus.JetStream().Stream(c, bus.Stream)
+	subjects := map[string]int{}
+	for seq := uint64(1); seq <= 4; seq++ {
+		m, err := st.GetMsg(c, seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		subjects[m.Subject]++
+		if m.Subject == "anfs.m2vq7cfr4k.cnfs.partitia.report.filed" && string(m.Data)+"\n" != string(cnfs) {
+			t.Errorf("not as it is: %s", m.Data)
+		}
+	}
+	want := map[string]int{"anfs.m2vq7cfr4k.cnfs.partitia.report.filed": 1, "anfs.tkj76y3nfx.anfs.report.closed": 1, "anfs.q7mwx4ne2r.lgat.escrow.payment.settled": 2}
+	if fmt.Sprint(subjects) != fmt.Sprint(want) {
+		t.Errorf("subjects %v", subjects)
+	}
+	if n := r.log.count("host/2026-10.jsonl holds an event of scope q7mwx4ne2r (its source): shipped by its source"); n != 1 {
+		t.Errorf("said %d times", n)
+	}
+	if _, ok := r.sh.Spool.Cursors()["host/2026-10.bus.jsonl"]; ok || r.msgs() != 4 {
+		t.Errorf("the recorder's file was read: %v", r.sh.Spool.Cursors())
 	}
 }

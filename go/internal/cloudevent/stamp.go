@@ -3,7 +3,6 @@ package cloudevent
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -99,40 +98,4 @@ func StampLine(line []byte, st Stamp) ([]byte, Event, error) {
 		return nil, ev, fmt.Errorf("stamped a line the profile refuses: %w", err)
 	}
 	return b.Bytes(), out, nil
-}
-
-type member struct {
-	key string
-	val json.RawMessage
-}
-
-// rawMembers are an object's members in their order, each value's bytes as written
-func rawMembers(obj []byte) ([]member, error) {
-	dec := json.NewDecoder(bytes.NewReader(obj))
-	t, err := dec.Token()
-	if err != nil || t != json.Delim('{') {
-		return nil, errors.New("not a JSON object")
-	}
-	var out []member
-	seen := map[string]bool{}
-	for dec.More() {
-		t, err := dec.Token()
-		if err != nil {
-			return nil, err
-		}
-		k, ok := t.(string)
-		if !ok {
-			return nil, errors.New("not a JSON object")
-		}
-		var v json.RawMessage
-		if err := dec.Decode(&v); err != nil {
-			return nil, err
-		}
-		if seen[k] {
-			return nil, fmt.Errorf("%s twice", k)
-		}
-		seen[k] = true
-		out = append(out, member{k, v})
-	}
-	return out, nil
 }

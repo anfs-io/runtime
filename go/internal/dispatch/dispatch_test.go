@@ -99,20 +99,23 @@ func TestLoadAndFilters(t *testing.T) {
 	if rules := r.d.Rules(); len(rules) != 1 || rules[0].Name != "fix-core-report" {
 		t.Fatalf("loaded %v", rules)
 	}
-	if got := strings.Join(r.d.Filters(), " "); got != "anfs.abcde23456.report.filed anfs.host.source.updated" {
+	if got := strings.Join(r.d.Filters(), " "); got != "anfs.abcde23456.anfs.report.filed anfs.host.anfs.source.updated" {
 		t.Errorf("filters %s", got)
 	}
 	for _, c := range []struct{ in, want []string }{
-		{[]string{"anfs.a.report.filed", "anfs.a.report.>"}, []string{"anfs.a.report.>"}},
-		{[]string{"anfs.a.report.filed", "anfs.a.report.filed"}, []string{"anfs.a.report.filed"}},
-		{[]string{"anfs.*.report.filed", "anfs.a.>"}, []string{"anfs.>"}},
-		{[]string{"anfs.a.x.y", "anfs.b.x.y"}, []string{"anfs.a.x.y", "anfs.b.x.y"}},
-		{[]string{"anfs.*.x.y", "anfs.b.x.y"}, []string{"anfs.*.x.y"}},
+		{[]string{"anfs.a.anfs.report.filed", "anfs.a.anfs.report.>"}, []string{"anfs.a.anfs.report.>"}},
+		{[]string{"anfs.a.anfs.report.filed", "anfs.a.anfs.report.filed"}, []string{"anfs.a.anfs.report.filed"}},
+		{[]string{"anfs.*.anfs.report.filed", "anfs.a.>"}, []string{"anfs.>"}},
+		{[]string{"anfs.a.anfs.x.y", "anfs.b.anfs.x.y"}, []string{"anfs.a.anfs.x.y", "anfs.b.anfs.x.y"}},
+		{[]string{"anfs.*.anfs.x.y", "anfs.b.anfs.x.y"}, []string{"anfs.*.anfs.x.y"}},
+		{[]string{"anfs.a.anfs.report.filed", "anfs.a.cnfs.>"}, []string{"anfs.a.anfs.report.filed", "anfs.a.cnfs.>"}},
+		{[]string{"anfs.a.cnfs.>", "anfs.a.cnfs.partitia.report.filed"}, []string{"anfs.a.cnfs.>"}},
+		{[]string{"anfs.*.cnfs.x.y", "anfs.a.>"}, []string{"anfs.>"}},
 	} {
 		var rules []*space.Rule
 		for _, s := range c.in {
 			parts := strings.SplitN(s, ".", 3)
-			ru := &space.Rule{Space: &space.Space{ID: parts[1]}, On: space.On{Type: strings.ReplaceAll(parts[2], ">", "*")}}
+			ru := &space.Rule{Space: &space.Space{ID: parts[1]}, On: space.On{Type: strings.ReplaceAll(strings.TrimPrefix(parts[2], "anfs."), ">", "*")}}
 			if parts[1] == "*" {
 				ru.Space.ID, ru.On.Space = "zzzzz23456", "lgat/"
 			}
@@ -349,8 +352,13 @@ func TestConsumer(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if strings.Join(info.filters, " ") != "anfs.abcde23456.report.filed anfs.host.source.updated" {
+	if strings.Join(info.filters, " ") != "anfs.abcde23456.anfs.report.filed anfs.host.anfs.source.updated" {
 		t.Errorf("filters %v", info.filters)
+	}
+	// an event on the old shape's subject (anfs.<scope>.<short type>) is not the dispatcher's
+	old := filed(t, r, "r-76", "shell:me", 0)
+	if _, err := js.Publish(ctx, "anfs.abcde23456.report.filed", old); err != nil {
+		t.Fatal(err)
 	}
 	l := filed(t, r, "r-77", "shell:me", 0)
 	ev, _ := cloudevent.Parse(l)
@@ -360,7 +368,7 @@ func TestConsumer(t *testing.T) {
 		}
 	}
 	src := event(t, "host", "source.updated", "core", "shell:me", time.Now(), nil)
-	js.Publish(ctx, "anfs.host.source.updated", src)
+	js.Publish(ctx, "anfs.host.anfs.source.updated", src)
 	deadline = time.Now().Add(5 * time.Second)
 	for {
 		recs, _ := r.sup.Store.All()

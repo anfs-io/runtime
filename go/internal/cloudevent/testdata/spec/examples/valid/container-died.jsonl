@@ -1,0 +1,1 @@
+{"specversion":"1.0","id":"01a16a36-a23c-72b7-92a3-10f8d46502e5","source":"/anfs/host","type":"io.anfs.container.died","subject":"valkey_valkey_1","time":"2026-10-23T19:22:07.804Z","datacontenttype":"application/json","actor":"podman","anfsv":1,"data":{"exit":"0","id":"6311d3ffb78f","image":"docker.io/valkey/valkey:9","pcm":"valkey"}}

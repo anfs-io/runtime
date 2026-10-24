@@ -221,7 +221,7 @@ func TestRunDispatches(t *testing.T) {
 	for {
 		got = got[:0]
 		s, _ := b.JetStream().Stream(ctx, bus.Stream)
-		c, _ := s.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{FilterSubjects: []string{"anfs.abcde23456.run.>"}})
+		c, _ := s.OrderedConsumer(ctx, jetstream.OrderedConsumerConfig{FilterSubjects: []string{"anfs.abcde23456.anfs.run.>"}})
 		if c != nil {
 			for {
 				m, err := c.Next(jetstream.FetchMaxWait(200 * time.Millisecond))
@@ -278,7 +278,7 @@ func TestRunDispatches(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("exit: %v\n%s", err, stderr.String())
 	}
-	for _, w := range []string{"rules: 1 loaded, 1 disabled, 0 off (dispatcher: none), 1 invalid, from 1 spaces", "rule anfs-dev/loop invalid", "consumer anfsd-dispatch: filters anfs.abcde23456.report.filed anfs.host.source.updated", "completed"} {
+	for _, w := range []string{"rules: 1 loaded, 1 disabled, 0 off (dispatcher: none), 1 invalid, from 1 spaces", "rule anfs-dev/loop invalid", "consumer anfsd-dispatch: filters anfs.abcde23456.anfs.report.filed anfs.host.anfs.source.updated", "completed"} {
 		if !strings.Contains(stderr.String(), w) {
 			t.Errorf("log lacks %q:\n%s", w, stderr.String())
 		}

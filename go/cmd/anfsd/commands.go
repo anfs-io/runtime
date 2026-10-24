@@ -238,7 +238,7 @@ func matchEvent(o *opts, stdin io.Reader, spaces []*space.Space) ([]byte, cloude
 		}
 		return last, ev, nil
 	}
-	typ := strings.TrimPrefix(o.value("--type"), "io.anfs.")
+	typ := cloudevent.NormalShort(o.value("--type"))
 	if typ == "" {
 		return nil, cloudevent.Event{}, fmt.Errorf("--event FILE, or --type to build one")
 	}

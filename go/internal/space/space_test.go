@@ -294,16 +294,50 @@ func TestMatching(t *testing.T) {
 func TestFilterSubject(t *testing.T) {
 	s := &Space{ID: "abcde23456"}
 	for _, c := range []struct{ typ, space, want string }{
-		{"report.filed", "", "anfs.abcde23456.report.filed"},
-		{"report.*", "", "anfs.abcde23456.report.>"},
-		{"report.fil?d", "", "anfs.abcde23456.report.>"},
+		{"report.filed", "", "anfs.abcde23456.anfs.report.filed"},
+		{"report.*", "", "anfs.abcde23456.anfs.report.>"},
+		{"report.fil?d", "", "anfs.abcde23456.anfs.report.>"},
 		{"*.filed", "", "anfs.abcde23456.>"},
-		{"container.started", "lgat/", "anfs.*.container.started"},
+		{"*", "", "anfs.abcde23456.>"},
+		{"container.started", "lgat/", "anfs.*.anfs.container.started"},
+		{"cnfs.*", "", "anfs.abcde23456.cnfs.>"},
+		{"cnfs.partitia.report.filed", "", "anfs.abcde23456.cnfs.partitia.report.filed"},
+		{"lgat.escrow.*.settled", "*", "anfs.*.lgat.escrow.>"},
 	} {
 		r := &Rule{Space: s, On: On{Type: c.typ, Space: c.space}}
 		if got := r.FilterSubject(); got != c.want {
 			t.Errorf("%s: %s, want %s", c.typ, got, c.want)
 		}
+	}
+}
+
+// Rules on other namespaces' types use the short type (SPEC.md §2): on.type in either form is
+// held short, matches that namespace's events and no anfs one (gap 12)
+func TestOtherNamespaces(t *testing.T) {
+	for _, typ := range []string{"io.cnfs.partitia.report.*", "cnfs.partitia.report.*"} {
+		r := rule(t, "", `{name: r, on: {type: "`+typ+`"}, as: m, prompt: x}`, env(t))
+		if r.Reason != "" || r.On.Type != "cnfs.partitia.report.*" {
+			t.Fatalf("%s: %q %q", typ, r.On.Type, r.Reason)
+		}
+		cnfs := cloudevent.Event{Type: "io.cnfs.partitia.report.filed", Scope: "abcde23456", Data: map[string]string{}}
+		anfs := ev("abcde23456", "report.filed", "r-1", nil)
+		if !r.Matches(cnfs, "sp") || r.Matches(anfs, "sp") {
+			t.Errorf("%s: matches cnfs %v, anfs %v", typ, r.Matches(cnfs, "sp"), r.Matches(anfs, "sp"))
+		}
+		if r.FilterSubject() != "anfs.abcde23456.cnfs.partitia.report.>" {
+			t.Errorf("%s: %s", typ, r.FilterSubject())
+		}
+	}
+	for _, typ := range []string{"io.anfs.report.filed", "anfs.report.filed"} {
+		if r := rule(t, "", `{name: r, on: {type: "`+typ+`"}, as: m, prompt: x}`, env(t)); r.On.Type != "report.filed" || r.FilterSubject() != "anfs.abcde23456.anfs.report.filed" {
+			t.Errorf("%s: %s %s", typ, r.On.Type, r.FilterSubject())
+		}
+	}
+	// on.data and {{data.<key>}} read top-level strings: a number never matches, renders empty
+	r := rule(t, "", `{name: r, on: {type: "cnfs.*", data: {n: "*"}}, as: m, prompt: x}`, env(t))
+	e := cloudevent.Event{Type: "io.cnfs.x.y", Scope: "abcde23456", Data: map[string]string{}, RawData: []byte(`{"n":1}`)}
+	if r.Matches(e, "sp") || Render("[{{data.n}}]", Vars{Event: e}) != "[]" {
+		t.Error("a number in data matched or rendered")
 	}
 }
 

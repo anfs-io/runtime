@@ -1,5 +1,8 @@
-// Package shipper sends the spool to the bus: each complete line of each month file, as it is, on
-// anfs.<scope>.<short type> with Nats-Msg-Id set to its CloudEvent id. At most 256 publishes await
+// Package shipper sends the spool to the bus: each complete line of each month file
+// (<scope>/<YYYY-MM>.jsonl; never the recorder's <YYYY-MM>.bus.jsonl), as it is, on
+// anfs.<scope>.<type without io.> (anfs-io/events SPEC.md §5: the scope its source names) with
+// Nats-Msg-Id set to its CloudEvent id. Any layer's event is shipped (io.cnfs, io.lgat: any JSON
+// data); a line in another scope's directory is said once per file and shipped by its source. At most 256 publishes await
 // their acks (one batch); a token bucket per scope (ANFSD_SHIP_RATE a second, ANFSD_SHIP_BURST)
 // holds a flood back, and the files hold the rest. A file's cursor moves only over the contiguous
 // prefix of its lines NATS acknowledged, and the cursors are written after each batch; a line sent
@@ -54,6 +57,8 @@ type Shipper struct {
 	limiters map[string]*rate.Limiter
 	state    string
 	shipped  int64
+	// misfiledSaid: the files a line of another scope was said of
+	misfiledSaid map[string]bool
 }
 
 // Shipped is how many lines NATS has acknowledged since the shipper started.
@@ -201,6 +206,21 @@ func (s *Shipper) collect() ([]spool.Line, error) {
 	return out, nil
 }
 
+// misfiled says once per file that its lines are another scope's (their source): shipped by
+// their source all the same, the subject being the event's
+func (s *Shipper) misfiled(key, scope string) {
+	s.mu.Lock()
+	if s.misfiledSaid == nil {
+		s.misfiledSaid = map[string]bool{}
+	}
+	said := s.misfiledSaid[key]
+	s.misfiledSaid[key] = true
+	s.mu.Unlock()
+	if !said {
+		s.Logf("%s holds an event of scope %s (its source): shipped by its source; the file is not its scope's", key, scope)
+	}
+}
+
 type sent struct {
 	line spool.Line
 	fut  jetstream.PubAckFuture // nil: not sent (invalid: done; or not reached: not done)
@@ -223,6 +243,9 @@ func (s *Shipper) batch(ctx context.Context, lines []spool.Line) (int, error) {
 			s.Logf("not shipped, not an event: %s at byte %d: %v", l.File.Key, l.Start, err)
 			items[i].done = true
 			continue
+		}
+		if ev.Scope != l.File.Scope {
+			s.misfiled(l.File.Key, ev.Scope)
 		}
 		if err := s.limiter(l.File.Scope).Wait(ctx); err != nil {
 			stopped = true // shutting down: what was sent is waited for, the rest stays

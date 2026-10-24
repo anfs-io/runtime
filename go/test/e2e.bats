@@ -6,7 +6,7 @@
 # one) and a fake wsm and anfs on PATH: one report.filed line in the spool is a run, its
 # run.submitted, run.working and run.completed in the stream. The fake podman (internal/testfake:
 # never the real one) printing a recorded container start: container.started in the stream on
-# anfs.host.container.started. A run's own events (02d): the fake harness emits into
+# anfs.host.anfs.container.started. A run's own events (02d): the fake harness emits into
 # $ANFS_EVENTS_SPOOL through core's anfs_emit when ANFS_CORE_LIB names a core checkout's lib/anfs
 # (else a printf'd line), and they reach the stream stamped with the run's identity; a forged
 # actor arrives with actorclaimed; the run's environment lacks what anfsd's had (SSH_AUTH_SOCK,
@@ -116,8 +116,8 @@ ids() {
   [ "$(printf '%s\n' "$output" | sort -u | wc -l | tr -d ' ')" = 25 ]
   [ "$(printf '%s\n' "$output" | head -1)" = "01a169de-e9bb-7000-8000-000000000001" ]
   run nats stream subjects ANFS --json
-  [[ "$output" == *'"anfs.host.report.filed": 20'* ]]
-  [[ "$output" == *'"anfs.abcde23456.report.filed": 5'* ]]
+  [[ "$output" == *'"anfs.host.anfs.report.filed": 20'* ]]
+  [[ "$output" == *'"anfs.abcde23456.anfs.report.filed": 5'* ]]
   grep -q 'not shipped, not an event: host/2026-10.jsonl at byte' "$BATS_TEST_TMPDIR/anfsd.log"
   [ "$(cat "$HOME/.local/state/anfsd/anfsd.pid")" = "$ANFSD_PID" ]
   # the stream as core/nats's settings make it
@@ -191,17 +191,17 @@ YML
   printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261023-9","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"package":"core/pcm","title":"t","to":"file"}}\n' \
     99 "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
   for i in $(seq 150); do
-    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.run.completed": 1'* ]] && break
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.anfs.run.completed": 1'* ]] && break
     sleep 0.2
   done
   run nats stream subjects ANFS --json
-  [[ "$output" == *'"anfs.abcde23456.run.submitted": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
-  [[ "$output" == *'"anfs.abcde23456.run.working": 1'* ]]
-  [[ "$output" == *'"anfs.abcde23456.run.completed": 1'* ]]
+  [[ "$output" == *'"anfs.abcde23456.anfs.run.submitted": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.abcde23456.anfs.run.working": 1'* ]]
+  [[ "$output" == *'"anfs.abcde23456.anfs.run.completed": 1'* ]]
   # the fake harness ran in the job with its actor; the commit counted
   grep -q '^ANFS_AS=anfs-dev/maintainer$' "$BATS_TEST_TMPDIR"/log/claude.*/env
   grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/log/anfs.log"
-  run nats stream get ANFS --last-for anfs.abcde23456.run.completed --json
+  run nats stream get ANFS --last-for anfs.abcde23456.anfs.run.completed --json
   [[ "$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)" == *'"commits":"core:1"'* ]]
 }
 
@@ -271,12 +271,12 @@ SH
       "$(( 90 + i ))" "$i" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
   done
   for i in $(seq 150); do
-    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.run.completed": 3'* ]] && break
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.anfs.run.completed": 3'* ]] && break
     sleep 0.2
   done
   run nats stream subjects ANFS --json
-  [[ "$output" == *'"anfs.abcde23456.run.completed": 3'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
-  [[ "$output" == *'"anfs.abcde23456.report.closed": 2'* ]] || { echo "$output"; cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.abcde23456.anfs.run.completed": 3'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.abcde23456.anfs.report.closed": 2'* ]] || { echo "$output"; cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
   local evs honest forged
   evs=$(stream_events)
   honest=$(grep '"io.anfs.report.closed"' <<< "$evs" | grep '"subject":"r-20261024-1"')
@@ -304,7 +304,7 @@ SH
   grep -q '^GIT_TERMINAL_PROMPT=0$' "$envf"
 }
 
-@test "podman: a container started is container.started in the stream, on anfs.host.container.started" {
+@test "podman: a container started is container.started in the stream, on anfs.host.anfs.container.started" {
   local fakes="$BATS_TEST_DIRNAME/../internal/testfake/testdata" bin="$BATS_TEST_TMPDIR/bin" i
   mkdir -p "$bin" "$BATS_TEST_TMPDIR/flog" "$BATS_TEST_TMPDIR/fctl"
   ln -s "$fakes/fake-podman" "$bin/podman"
@@ -317,17 +317,17 @@ SH
     "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
   ANFSD_PID=$!
   for i in $(seq 100); do
-    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.host.container.removed": 1'* ]] && break
+    [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.host.anfs.container.removed": 1'* ]] && break
     sleep 0.1
   done
   run nats stream subjects ANFS --json
-  [[ "$output" == *'"anfs.host.podman.connected": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
-  [[ "$output" == *'"anfs.host.container.started": 1'* ]]
-  [[ "$output" == *'"anfs.host.container.created": 1'* ]]
-  [[ "$output" == *'"anfs.host.container.health": 2'* ]]
-  [[ "$output" == *'"anfs.host.container.died": 1'* ]]
+  [[ "$output" == *'"anfs.host.anfs.podman.connected": 1'* ]] || { cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  [[ "$output" == *'"anfs.host.anfs.container.started": 1'* ]]
+  [[ "$output" == *'"anfs.host.anfs.container.created": 1'* ]]
+  [[ "$output" == *'"anfs.host.anfs.container.health": 2'* ]]
+  [[ "$output" == *'"anfs.host.anfs.container.died": 1'* ]]
   [[ "$output" != *exec* && "$output" != *sync* ]]
-  run nats stream get ANFS --last-for anfs.host.container.started --json
+  run nats stream get ANFS --last-for anfs.host.anfs.container.started --json
   local ev
   ev=$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)
   [ "$(yq -p json -oy -r '.subject' <<< "$ev")" = glitchtip_web_1 ]

@@ -1,0 +1,1 @@
+{"specversion":"1.0","id":"01a169f9-159d-7dee-b95c-4bcae2b2595a","source":"/anfs/spaces/tkj76y3nfx","type":"io.anfs.report.closed","subject":"r-20261023-1","time":"2026-10-23T18:14:54.109Z","datacontenttype":"application/json","actor":"claude:2e9431a0","spacepath":"anfs-dev","anfsv":1,"data":{"commit":"3b121f0","source":"core"}}

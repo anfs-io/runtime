@@ -1,0 +1,1 @@
+{"specversion":"0.3","id":"01a16d64-86e7-7fb2-9d4a-7284512eb15d","source":"/anfs/spaces/tkj76y3nfx","type":"io.anfs.report.filed","subject":"r-20261024-21","time":"2026-10-24T10:11:07.111Z","datacontenttype":"application/json","actor":"claude:2e9431a0","spacepath":"anfs-dev","anfsv":1,"data":{"package":"core/pcm","title":"pcm run drops env","to":"file"}}

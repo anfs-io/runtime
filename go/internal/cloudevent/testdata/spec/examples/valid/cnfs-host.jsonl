@@ -1,0 +1,1 @@
+{"specversion":"1.0","id":"01a16d23-6b7a-780b-b07b-482028e810a8","source":"/cnfs/host","type":"io.cnfs.appwork.worker.started","subject":"default","time":"2026-10-24T09:00:00.250Z","datacontenttype":"application/json","actor":"solid-queue:4242","anfsv":1,"data":{"queue":"default","pid":4242,"threads":3}}
