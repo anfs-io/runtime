@@ -5,12 +5,26 @@ its one program is `anfsd`, the anfs daemon.
 
 ## anfsd
 
+The events are the profile of **[anfs-io/events](https://github.com/anfs-io/events)** (SPEC.md:
+one CloudEvents 1.0 profile for every layer, anfs, cnfs, lgat; its conformance examples are
+vendored in `go/internal/cloudevent/testdata/spec/`, `VERSION` naming the commit, and the Go tests
+run every one through the parser and the schema).
+
 anfsd is **the shipper**: it tails the event log the tools write
-(`~/.local/state/anfs/events/<space id>/<YYYY-MM>.jsonl`, one CloudEvent per line: core's
-`lib/anfs/events.sh`) and publishes each line, as it is, to the NATS JetStream stream `ANFS`
-(subjects `anfs.<space id|host>.<noun>.<verb>`, `Nats-Msg-Id` the event's id, a 24 h duplicate
-window, so each event is in the stream once). It is not a broker: NATS is (core/nats). The files
-stay the complete, permanent record; the stream is a bounded window (90 days, 1 GiB) for programs.
+(`~/.local/state/anfs/events/<space id|host>/<YYYY-MM>.jsonl`, one event per line: core's
+`lib/anfs/events.sh`, and any layer's producer that appends to the spool) and publishes each line,
+as it is, to the NATS JetStream stream `ANFS` (subjects `anfs.<scope>.<type without io.>`:
+`anfs.<id>.anfs.report.filed`, `anfs.host.anfs.container.started`,
+`anfs.<id>.cnfs.partitia.report.filed`; `Nats-Msg-Id` the event's id, a 24 h duplicate window, so
+each event is in the stream once; a body over 4095 bytes is refused by the stream). It is not a
+broker: NATS is (core/nats). The files stay the complete, permanent record; the stream is a
+bounded window (90 days, 1 GiB) for programs.
+
+And **the recorder**: a layer may also publish to NATS directly (its NATS user, core/nats's
+`ANFS_BUS_LAYERS`). The consumer `anfsd-recorder` reads every message and appends each event whose
+id is not already in its month's files to `<scope>/<YYYY-MM>.bus.jsonl`, in the canonical form;
+the spool's own lines are found and skipped, invalid or mismatched messages are terminated and
+logged. The shipper never reads `.bus.jsonl`, so nothing recorded is published again.
 
 It is also **the dispatcher and supervisor** (agents/02b): the `dispatch:` rules of every
 installed space (`space.yml`, beside `agents:` and `access:`; core AGENTS.md, "Dispatch") are read
@@ -18,8 +32,12 @@ by one parser here, matched against the stream through the durable consumer `anf
 each match is a run: an agent CLI (claude, opencode, pi, antigravity) started in an `anfs work`
 job, in its own session, with the access its harness can enforce, its life recorded in
 `~/.local/state/anfsd/runs/<run id>/` and as `run.*` events (A2A's task states). And **the report
-sink**: the consumer `anfsd-sink-report` hands each `report.*` event to `anfs report __sink`, which
-renders the report records into the report file.
+sink**: the consumer `anfsd-sink-report` (`anfs.*.anfs.report.>`) hands each `report.*` event to
+`anfs report __sink`, which renders the report records into the report file. A rule's `on.type` is
+the short type (`report.*`; another layer's with its namespace, `cnfs.partitia.*`), its `on.data`
+and `{{data.<key>}}` read data's top-level strings (a number or an object never matches and
+renders empty). `run.completed` (and `run.failed` when known) carries the run usage: `model`,
+`input_tokens`, `output_tokens`, `cost_usd` (claude's stream; the rule's model otherwise).
 
 A run is fenced (agents/02d). Its **environment is an allow-list**: a working shell, the XDG
 paths, `ANFS_*`, and claude's own credential for claude; never `SSH_AUTH_SOCK`, `GH_TOKEN` or
@@ -55,19 +73,21 @@ And **the podman follower** (agents/02c): one child, `podman events --format jso
 type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,
 died, removed, paused, unpaused, a change of health; a pod's created, started, stopped, removed)
 it writes into the host scope as `container.<verb>` and `pod.<verb>` (actor `podman`, subject the
-name, data `id`, `image`, `pod`, `exit`, `health`, `pcm`). The same container, status and second
+name, data `id`, `image`, `pod`, `exit`, `health`, `pcm`; the time podman's own). The same container, status and second
 is one event, at most 20 a second. Podman away (not installed, the podman machine stopped): the
 child is started again after 5, 10, 30, then every 60 s, with `podman.connected` and
 `podman.disconnected` around each connection; nothing polls. `ANFSD_PODMAN=off` turns it off.
 
 ```
-anfsd run          ship, dispatch, supervise, follow podman until SIGTERM (launchd or systemd
+anfsd run          ship, record, dispatch, supervise, follow podman until SIGTERM (launchd or systemd
                    runs it: anfs bus start); SIGHUP reads the rules again (anfs bus reload)
 anfsd ship --once  ship what is pending, then exit
 anfsd rules [--json] [space.yml...]       the rules and their status (anfs agents rules)
 anfsd match [--json] --type T [--subject S] [--data K=V]... [--space S] | --event FILE
                    what the rules would do with that event, starting nothing (anfs agents match)
 anfsd render HARNESS                      a run's output as text (anfs agents logs)
+anfsd validate FILE...|-                  every line against the profile: FILE:LINE RULE message,
+                   a spool file's scope and month too; exit 1 on an invalid line (anfs events validate)
 anfsd version
 ```
 

@@ -1,20 +1,26 @@
 # runtime: for agents
 
 The toolkit's compiled programs. Today: `anfsd` (Go, `go/`). Plans are in anfs-io/docs
-(`units/agents/02-daemon/`); the event profile anfsd reads is `units/agents/01-events/plan.md`
-there. The bash side (the packages that install and run anfsd, `anfs bus`) is core's
+(`units/agents/02-daemon/`, `units/agents/05-spec/`); the event profile is anfs-io/events
+(https://github.com/anfs-io/events: SPEC.md, REGISTRY.md, the schema and the conformance examples,
+vendored in `go/internal/cloudevent/testdata/spec/`; updating is copying a newer tag's, with its
+`VERSION`). The bash side (the packages that install and run anfsd, `anfs bus`) is core's
 `packages/{nats,anfsd}`.
 
 ## Layout
 
 ```
 go/go.mod                    module github.com/anfs-io/runtime/go
-go/cmd/anfsd                 run | ship --once | rules | match | render | version | help
+go/cmd/anfsd                 run | ship --once | rules | match | render | validate | version | help
 go/internal/config           anfsd.env (core's settings-file rules), the XDG paths, NATS's port and password
-go/internal/cloudevent       the profile (anfsv 1): Parse validates a line; Line/Append write one;
-                             StampLine (a run's line with its identity), AppendLine
+go/internal/cloudevent       the profile (anfs-io/events, anfsv 1): Parse validates an event (an *Error
+                             names the spec's rule); Short/FullType/NatsSubject/SubjectParts; Canonical,
+                             Noncanonical; Line/Append write one; StampLine (a run's line with its
+                             identity), AppendLine, AppendRecorded (.bus.jsonl); conformance_test.go
+                             runs the vendored examples through Parse and the schema
 go/internal/spool            the month files, complete lines past each cursor, cursors.json; Watch (fsnotify + 30 s)
-go/internal/bus              connect (backoff 1/2/5/10/30 s), ensure stream ANFS, publish with Nats-Msg-Id
+go/internal/bus              connect (backoff 1/2/5/10/30 s), ensure stream ANFS (max_msg_size: 4095 + the
+                             headers), publish with Nats-Msg-Id; testdata: core/nats's layer users
 go/internal/shipper          spool -> bus: batches of 256, a token bucket per scope, cursors after the acked prefix
 go/internal/space            space.yml's access:, agents:, dispatch: (the one parser: validation, templates,
                              matching, filter subjects); Discover: the installed spaces (wsm ls --json)
@@ -28,8 +34,10 @@ go/internal/supervise        the runs: records (runs/<id>/run.json), the queue, 
                              run's environment (env.go: the allow-list); its spool (ingest.go); held
                              runs and their rate timers (hold.go)
 go/internal/harness          one file per harness: claude, opencode, pi, antigravity (argv, env, files),
-                             the summary of a run's output, the text of its stream
+                             the summary of a run's output, its usage (usage.go), the text of its stream
 go/internal/sink             the consumer anfsd-sink-report: anfs report __sink per report.* event
+go/internal/recorder         the consumer anfsd-recorder: what is on the bus and not in a month's files
+                             into <scope>/<YYYY-MM>.bus.jsonl, canonical; invalid or mismatched: Term
 go/internal/podman           podman events -> container.*, pod.* in the host scope: kept statuses, health
                              changes only, coalesced per container/status/second, 20/s; the child
                              restarted after 5, 10, 30, 60 s; podman.connected/disconnected; podman.json
@@ -48,8 +56,13 @@ go/test/e2e.bats             the real nats-server and the built anfsd in a temp 
   files under `~/.local/state/anfsd/` and the stream are its only outputs. `anfs bus status`
   reads them and NATS's monitoring port.
 - **The files are the record.** Tools only append lines (one `write(2)`, `O_APPEND`, at most 4096
-  bytes); anfsd's own events go through `cloudevent.Append` the same way, so the files stay the
-  mirror of everything. Nothing rewrites or deletes a line.
+  bytes); anfsd's own events go through `cloudevent.Append` the same way, and what a layer
+  publishes to NATS directly the recorder appends to `<YYYY-MM>.bus.jsonl`, so the files stay the
+  mirror of everything. Nothing rewrites or deletes a line; the shipper never reads `.bus.jsonl`.
+- **The spec is anfs-io/events.** `cloudevent` follows it; a change of the profile is a change
+  there first, then a newer tag's examples copied into `testdata/spec/`. Subjects are
+  `anfs.<scope>.<type without io.>` for every layer; the short type (`report.filed`,
+  `cnfs.x.y`) is what rules and `--type` take, never a subject.
 - **Exactly once per event id**: `Nats-Msg-Id` is the CloudEvent id; a cursor moves only over the
   contiguous prefix NATS acknowledged; every consumer is idempotent by event id too.
 - **No loops.** Every wait blocks (a channel, a timer, fsnotify); a failure backs off (1, 2, 5,
@@ -58,7 +71,8 @@ go/test/e2e.bats             the real nats-server and the built anfsd in a temp 
 - Tests: an embedded server (`internal/testnats`), never a real install; the e2e uses a temp HOME
   and a server on a random port. Never `pkill`; kill by pid.
 - Dependencies are pinned in `go.mod`; a new one is a decision in the plan (02b added
-  go.yaml.in/yaml/v3 v3.0.5 for space.yml).
+  go.yaml.in/yaml/v3 v3.0.5 for space.yml; 05b santhosh-tekuri/jsonschema/v6 v6.0.3, in tests only:
+  the spec's schema over its examples).
 - **Never a real harness in a test.** Every agent CLI, `anfs` and `wsm` a test runs is
   `internal/testfake`'s, on a PATH of the fakes and the system's (`/usr/bin:/bin`); the e2e bats does
   the same. A harness's flags are checked against `--help` only, by hand.
