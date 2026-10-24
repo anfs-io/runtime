@@ -155,7 +155,7 @@ ids() {
 
 @test "dispatch: a report.filed line in the spool is a run, its run.* in the stream" {
   local fakes="$BATS_TEST_DIRNAME/../internal/testfake/testdata" bin="$BATS_TEST_TMPDIR/bin" sp="$HOME/spaces/anfs-dev"
-  mkdir -p "$bin" "$sp/prompts" "$BATS_TEST_TMPDIR/flog" "$BATS_TEST_TMPDIR/fctl" "$BATS_TEST_TMPDIR/fwork"
+  mkdir -p "$bin" "$sp/prompts" "$BATS_TEST_TMPDIR/log" "$BATS_TEST_TMPDIR/ctl" "$BATS_TEST_TMPDIR/work"
   ln -s "$fakes/fake-harness" "$bin/claude"
   ln -s "$fakes/fake-anfs" "$bin/anfs"
   printf '#!/bin/sh\nexec anfs work "$@"\n' > "$bin/anfs-work"
@@ -173,10 +173,10 @@ dispatch:
     prompt_file: prompts/report-filed.md
 YML
   echo 'Fix {{subject}}.' > "$sp/prompts/report-filed.md"
-  : > "$BATS_TEST_TMPDIR/fctl/commit"
-  # the fake writes its record into FAKE_LOG; anfsd's PATH holds only the fakes and the system
-  FAKE_LOG="$BATS_TEST_TMPDIR/flog" FAKE_CTL="$BATS_TEST_TMPDIR/fctl" FAKE_WORK="$BATS_TEST_TMPDIR/fwork" \
-    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 ANFSD_PODMAN=off PATH="$bin:/usr/bin:/bin" \
+  : > "$BATS_TEST_TMPDIR/ctl/commit"
+  # the fakes keep their records beside HOME (log/, ctl/, work/: FAKE_* do not pass a run's
+  # allow-list); anfsd's PATH holds only the fakes and the system
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 ANFSD_PODMAN=off PATH="$bin:/usr/bin:/bin" \
     "$ANFSD" run 2>>"$BATS_TEST_TMPDIR/anfsd.log" &
   ANFSD_PID=$!
   local i
@@ -195,8 +195,8 @@ YML
   [[ "$output" == *'"anfs.abcde23456.run.working": 1'* ]]
   [[ "$output" == *'"anfs.abcde23456.run.completed": 1'* ]]
   # the fake harness ran in the job with its actor; the commit counted
-  grep -q '^ANFS_AS=anfs-dev/maintainer$' "$BATS_TEST_TMPDIR"/flog/claude.*/env
-  grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/flog/anfs.log"
+  grep -q '^ANFS_AS=anfs-dev/maintainer$' "$BATS_TEST_TMPDIR"/log/claude.*/env
+  grep -q 'work new fix-r-20261023-9 core' "$BATS_TEST_TMPDIR/log/anfs.log"
   run nats stream get ANFS --last-for anfs.abcde23456.run.completed --json
   [[ "$(yq -p json -oy -r '.data' <<< "$output" | base64 --decode)" == *'"commits":"core:1"'* ]]
 }

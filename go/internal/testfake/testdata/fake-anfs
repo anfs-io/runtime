@@ -3,7 +3,11 @@
 # a git repo on main with one commit, then on the job's branch), and anfs report __sink (the event
 # on stdin kept in $FAKE_LOG/sink.<pid>; failing while $FAKE_CTL/sink-fail says so). Every call is
 # a line in $FAKE_LOG/anfs.log.
+# FAKE_* default to the directories beside $HOME: anfsd's calls get the allow-list only (02d)
+: "${FAKE_LOG:=${HOME%/*}/log}" "${FAKE_CTL:=${HOME%/*}/ctl}" "${FAKE_WORK:=${HOME%/*}/work}"
+export FAKE_LOG FAKE_CTL FAKE_WORK
 printf '%s\n' "$*" >> "$FAKE_LOG/anfs.log"
+env > "$FAKE_LOG/anfs.env"
 case "$1 $2" in
   "work path")
     [ -d "$FAKE_WORK/$3" ] || { echo "anfs work: no job $3" >&2; exit 1; }

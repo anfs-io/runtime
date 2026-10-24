@@ -19,6 +19,9 @@ import (
 
 const sid = "abcde23456"
 
+// Ended_ is waitState's "any final state"
+const Ended_ = "(ended)"
+
 type rig struct {
 	t      *testing.T
 	f      *testfake.Fakes
@@ -93,7 +96,7 @@ func (r *rig) waitState(id, state string, within time.Duration) *Record {
 	deadline := time.Now().Add(within)
 	for {
 		rc, err := r.sup.Store.Load(id)
-		if err == nil && rc.State == state {
+		if err == nil && (rc.State == state || state == Ended_ && Ended(rc.State)) {
 			return rc
 		}
 		if time.Now().After(deadline) {
@@ -164,14 +167,16 @@ func TestLifecycleWithJob(t *testing.T) {
 	for k, v := range map[string]string{
 		"ANFS_ACTOR": "claude:" + rc.Last8(), "ANFS_AS": "anfs-dev/maintainer", "ANFS_RUN": rc.ID,
 		"ANFS_EVENT": filepath.Join(runDir, "event.json"), "ANFS_WORK_JOB": "fix-r-1", "ANFS_WORK_NUMBER": "7",
-		"TMPDIR": job + "/.tmp", "ROUNDTRIP_SRC_ROOT": "/a path", "FAKE_CTL": r.f.Ctl,
+		"TMPDIR": job + "/.tmp", "ROUNDTRIP_SRC_ROOT": "/a path",
 	} {
 		if s.Env[k] != v {
 			t.Errorf("env %s=%q, want %q", k, s.Env[k], v)
 		}
 	}
-	if _, ok := s.Env["ANFS_WORK"]; ok {
-		t.Error("ANFS_WORK reached the run")
+	for _, k := range []string{"ANFS_WORK", "FAKE_CTL", "GIT_CONFIG_GLOBAL"} {
+		if _, ok := s.Env[k]; ok {
+			t.Errorf("%s reached the run (not in the allow-list)", k)
+		}
 	}
 	// the argv: claude's, the settings file written, the prompt with the footer last
 	a := s.Argv
@@ -526,3 +531,110 @@ func TestParseEnv(t *testing.T) {
 }
 
 func sprintf(f string, a ...any) string { return fmt.Sprintf(f, a...) }
+
+// The run's environment is the allow-list plus anfsd's names (02d, F7): no SSH agent, no tokens,
+// no ANFSD_*; claude alone gets its credential; git asks nobody and uses no helper
+func TestRunEnvAllowList(t *testing.T) {
+	r := newRig(t, 4)
+	// a gitconfig in HOME whose helper would hand out a password, as osxkeychain would
+	os.WriteFile(filepath.Join(r.f.Home, ".gitconfig"), []byte("[credential]\n\thelper = \"!f() { echo username=u; echo password=leaked; }; f\"\n"), 0o644)
+	r.f.Touch("script", `printf 'protocol=https\nhost=example.com\n\n' | git credential fill > "$FAKE_LOG/fill.$$" 2>&1
+echo "fill exit $?" >> "$FAKE_LOG/fill.$$"
+`)
+	r.f.Mode("script")
+	r.sup.Env = append(r.sup.Env,
+		"SSH_AUTH_SOCK=/tmp/agent.sock", "GH_TOKEN=gh1", "GITHUB_TOKEN=gh2", "AWS_SECRET_ACCESS_KEY=aws",
+		"ANTHROPIC_API_KEY=sk-ant", "CLAUDE_CODE_OAUTH_TOKEN=oat", "ANFSD_MAX_RUNS=9", "ANFS_SOURCES_HOME=/srcs",
+		"ANFS_WORK=job", "ANFS_EVENTS_SPOOL=/elsewhere", "GIT_ASKPASS=/bin/askpass", "LC_ALL=C", "TMPDIR=/anfsd/tmp",
+		"FAKE_LOG="+r.f.Log)
+	r.start()
+	c := rec("r", "m", "claude", "")
+	c.SpaceDir = r.f.Home
+	o := rec("o", "o", "opencode", "fix-env", "core")
+	r.submit(c)
+	r.submit(o)
+	for _, id := range []string{c.ID, o.ID} {
+		if d := r.waitState(id, Ended_, 10*time.Second); d.State != Completed {
+			out, _ := os.ReadFile(filepath.Join(r.sup.Store.RunDir(id), "out.log"))
+			so, _ := filepath.Glob(filepath.Join(r.f.Log, "*", "script.out"))
+			var sb []byte
+			for _, f := range so {
+				b, _ := os.ReadFile(f)
+				sb = append(sb, b...)
+			}
+			t.Fatalf("%s: %s %v\n%s\n%s", d.Harness, d.State, d.Exit, out, sb)
+		}
+	}
+	byName := map[string]testfake.Started{}
+	for _, s := range r.f.Starts() {
+		byName[s.Name] = s
+	}
+	allowed := map[string]bool{"PATH": true, "HOME": true, "LC_ALL": true, "TMPDIR": true, "ANFS_SOURCES_HOME": true,
+		"ANFS_EVENTS": true, "ANFS_LOG": true, "ANFS_ACTOR": true, "ANFS_AS": true, "ANFS_RUN": true, "ANFS_EVENT": true,
+		"ANFS_EVENTS_SPOOL": true, "GIT_TERMINAL_PROMPT": true, "GIT_CONFIG_COUNT": true, "GIT_CONFIG_KEY_0": true,
+		"GIT_CONFIG_VALUE_0": true, "GIT_CONFIG_KEY_1": true, "GIT_CONFIG_VALUE_1": true,
+		// set by the shell the wrapper and the fake run in, or by the job (anfs work env)
+		"PWD": true, "SHLVL": true, "OLDPWD": true, "_": true,
+		"ANFS_WORK_JOB": true, "ANFS_WORK_NUMBER": true, "ROUNDTRIP_SRC_ROOT": true,
+		// the harness's own
+		"OPENCODE_CONFIG_CONTENT": true, "ANTHROPIC_API_KEY": true, "CLAUDE_CODE_OAUTH_TOKEN": true,
+		"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": true, "OPENCODE_DISABLE_PROJECT_CONFIG": true, "OPENCODE_DISABLE_CLAUDE_CODE": true,
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS": true, "OPENCODE_PURE": true,
+	}
+	for name, s := range byName {
+		for k := range s.Env {
+			if !allowed[k] {
+				t.Errorf("%s: %s reached the run", name, k)
+			}
+		}
+		if s.Env["ANFS_SOURCES_HOME"] != "/srcs" || s.Env["LC_ALL"] != "C" || s.Env["GIT_TERMINAL_PROMPT"] != "0" {
+			t.Errorf("%s: %v", name, s.Env)
+		}
+		if s.Env["TMPDIR"] == "/anfsd/tmp" {
+			t.Errorf("%s: anfsd's TMPDIR", name)
+		}
+	}
+	cl, oc := byName["claude"].Env, byName["opencode"].Env
+	if cl["ANTHROPIC_API_KEY"] != "sk-ant" || cl["CLAUDE_CODE_OAUTH_TOKEN"] != "oat" {
+		t.Errorf("claude lacks its credential: %v", cl)
+	}
+	if _, ok := oc["ANTHROPIC_API_KEY"]; ok {
+		t.Error("opencode got claude's credential")
+	}
+	if cl["GIT_CONFIG_COUNT"] != "1" || cl["GIT_CONFIG_KEY_0"] != "credential.helper" {
+		t.Errorf("git: %v", cl)
+	}
+	// git asked nobody and no helper answered, in both
+	fills, _ := filepath.Glob(filepath.Join(r.f.Log, "fill.*"))
+	if len(fills) != 2 {
+		t.Fatalf("%d fills", len(fills))
+	}
+	for _, f := range fills {
+		b, _ := os.ReadFile(f)
+		if strings.Contains(string(b), "leaked") || strings.Contains(string(b), "fill exit 0") {
+			t.Errorf("a credential came back: %s", b)
+		}
+	}
+	// anfsd's own anfs calls get the same list
+	if b, err := os.ReadFile(filepath.Join(r.f.Log, "anfs.env")); err == nil {
+		for _, bad := range []string{"SSH_AUTH_SOCK", "GH_TOKEN", "ANFSD_MAX_RUNS", "ANTHROPIC_API_KEY"} {
+			if strings.Contains(string(b), bad+"=") {
+				t.Errorf("anfs got %s", bad)
+			}
+		}
+		if !strings.Contains(string(b), "ANFS_SOURCES_HOME=/srcs") || !strings.Contains(string(b), "GIT_TERMINAL_PROMPT=0") {
+			t.Errorf("anfs env:\n%s", b)
+		}
+	} else {
+		t.Error(err)
+	}
+}
+
+// the job's GIT_CONFIG_COUNT is kept: the reset goes after it
+func TestGitNoCredentialsAfterTheJobs(t *testing.T) {
+	env := gitNoCredentials([]string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.hooksPath", "GIT_CONFIG_VALUE_0=/h"})
+	want := "GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/h GIT_TERMINAL_PROMPT=0 GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1="
+	if strings.Join(env, " ") != want {
+		t.Errorf("%v", env)
+	}
+}

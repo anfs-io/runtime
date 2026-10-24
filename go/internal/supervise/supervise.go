@@ -472,15 +472,16 @@ func (s *Supervisor) killLater(pgid int) {
 }
 
 // prepare: the job (made by anfs work new, or this run's own from an earlier try), its variables
-// and directory; with job: none the space's directory and a TMPDIR in the run's directory.
+// and directory; with job: none the space's directory and a TMPDIR in the run's directory. The
+// environment starts from the allow-list (runEnv), and git is told to ask nobody.
 func (s *Supervisor) prepare(r *Record) (env []string, cwd, tmp, reason string, err error) {
-	env = baseEnv(s.Env)
+	env = runEnv(s.Env, r.Harness)
 	if r.Job == "" {
 		tmp = filepath.Join(s.Store.RunDir(r.ID), "tmp")
 		if err := os.MkdirAll(tmp, 0o700); err != nil {
 			return nil, "", "", "spawn", err
 		}
-		return append(env, "TMPDIR="+tmp), r.SpaceDir, tmp, "", nil
+		return gitNoCredentials(append(env, "TMPDIR="+tmp)), r.SpaceDir, tmp, "", nil
 	}
 	path, rc, _ := s.anfs("work", "path", r.Job)
 	if rc == 0 && !r.JobMade {
@@ -519,7 +520,7 @@ func (s *Supervisor) prepare(r *Record) (env []string, cwd, tmp, reason string, 
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return nil, "", "", "job", err
 	}
-	return env, cwd, tmp, "", nil
+	return gitNoCredentials(env), cwd, tmp, "", nil
 }
 
 // anfs runs the anfs program: its stdout, exit status, and stderr's last line
@@ -527,7 +528,7 @@ func (s *Supervisor) anfs(args ...string) (string, int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	c := exec.CommandContext(ctx, s.Anfs, args...)
-	c.Env = append(baseEnv(s.Env), "ANFS_EVENTS=off")
+	c.Env = append(gitNoCredentials(runEnv(s.Env, "")), "ANFS_EVENTS=off")
 	c.Stdin = nil
 	var out, errb bytes.Buffer
 	c.Stdout, c.Stderr = &out, &errb
@@ -592,24 +593,6 @@ func unquote(v string) (string, error) {
 		b.WriteByte(v[i])
 	}
 	return b.String(), nil
-}
-
-// baseEnv is anfsd's environment without what must never reach a run: ANFS_WORK (a run's tools
-// are the installed ones), and the variables anfsd sets itself
-func baseEnv(env []string) []string {
-	if env == nil {
-		env = os.Environ()
-	}
-	var out []string
-	for _, kv := range env {
-		k, _, _ := strings.Cut(kv, "=")
-		switch k {
-		case "ANFS_WORK", "ANFS_WORK_SAID", "ANFS_ACTOR", "ANFS_AS", "ANFS_RUN", "ANFS_EVENT", "TMPDIR":
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
 }
 
 func setEnv(env []string, k, v string) []string {

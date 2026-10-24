@@ -58,6 +58,10 @@ func build(t *testing.T) string {
 // no real one can be found)
 func env(t *testing.T, h string) (*testfake.Fakes, []string) {
 	f := testfake.New(t)
+	// a run's environment is an allow-list (02d): the fakes find their directories beside HOME
+	for name, d := range map[string]string{"log": f.Log, "ctl": f.Ctl, "work": f.Work} {
+		os.Symlink(d, filepath.Join(filepath.Dir(h), name))
+	}
 	e := []string{"HOME=" + h}
 	for _, kv := range f.Env() {
 		if !strings.HasPrefix(kv, "HOME=") {
