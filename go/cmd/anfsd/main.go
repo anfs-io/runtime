@@ -10,6 +10,7 @@
 //	anfsd ship --once  ship what is pending and exit (tests, by hand)
 //	anfsd rules        the rules and their status (anfs agents rules reads --json)
 //	anfsd match        what the rules would do with an event, starting nothing (anfs agents match)
+//	anfsd validate     events checked against the profile (anfs events validate runs it)
 //	anfsd version      the version (a release's tag, or "dev")
 //	anfsd help
 //
@@ -60,6 +61,12 @@ Usage:
                      what each rule would do with the event: no match (and why),
                      submit (the job, the harness's command line) or reject (why).
                      Starts nothing and writes nothing; disabled rules are shown too
+  anfsd validate FILE...|-
+                     every line checked against the events profile
+                     (anfs-io/events): FILE:LINE RULE message per problem; a
+                     spool file (<scope>/<YYYY-MM>[.bus].jsonl) also for its
+                     lines' scope and month; noncanonical is said, not failed.
+                     Exit 1 when a line is invalid
   anfsd render HARNESS
                      a run's out.log on stdin as text (anfs agents logs)
   anfsd version      print the version
@@ -107,6 +114,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return rulesCmd(args[1:], stdout, stderr)
 	case "match":
 		return matchCmd(args[1:], os.Stdin, stdout, stderr)
+	case "validate":
+		return validateCmd(args[1:], os.Stdin, stdout, stderr)
 	case "render":
 		if len(args) != 2 {
 			fmt.Fprint(stderr, usage)
