@@ -8,6 +8,8 @@ stream-json
 dontAsk
 --settings
 /state/runs/r1/claude.json
+--setting-sources=
+--strict-mcp-config
 --add-dir
 /home/u/.local/share/anfs/sources
 --add-dir
@@ -24,8 +26,14 @@ m1
 fix-core-report:89abcdef
 --
 Fix it.\n\n---\nfooter
+# env
+CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
 # claude.json
 {
+  "claudeMdExcludes": [
+    "/home/u/.claude/CLAUDE.md",
+    "/home/u/.claude/rules/**"
+  ],
   "permissions": {
     "allow": [
       "Read(//home/u/.local/share/anfs/sources/**)",
@@ -79,6 +87,18 @@ Fix it.\n\n---\nfooter
   },
   "sandbox": {
     "allowUnsandboxedCommands": false,
+    "credentials": {
+      "envVars": [
+        {
+          "mode": "deny",
+          "name": "ANTHROPIC_API_KEY"
+        },
+        {
+          "mode": "deny",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN"
+        }
+      ]
+    },
     "enabled": true,
     "failIfUnavailable": true,
     "filesystem": {
@@ -87,6 +107,14 @@ Fix it.\n\n---\nfooter
         "/state/runs/r1/events",
         "/tmp/anfs-work-501-3",
         "/work/fix-r-1"
+      ],
+      "denyRead": [
+        "/home/u/.claude/.credentials.json",
+        "/home/u/.config/gh",
+        "/home/u/.git-credentials",
+        "/home/u/.local/state/nats",
+        "/home/u/.netrc",
+        "/home/u/.ssh"
       ]
     }
   }

@@ -323,7 +323,7 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				}
 			}
 			if dec.Record != nil && (row.Result == "submit" || row.Result == "disabled" || row.Result == "reject") {
-				fillPlan(&row, dec, line)
+				fillPlan(&row, dec, line, cfg.Settings.ClaudeBare)
 			}
 			rows = append(rows, row)
 		}
@@ -355,7 +355,7 @@ func matchCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 // fillPlan: the job, the cwd, the harness's command line as the supervisor would build it (the
 // job's directory as anfs work names it; the prompt cut)
-func fillPlan(row *matchRow, dec dispatch.Decision, line []byte) {
+func fillPlan(row *matchRow, dec dispatch.Decision, line []byte, bare bool) {
 	r := dec.Record
 	row.Job, row.Repos, row.Prompt = r.Job, append([]string{}, r.Repos...), dec.Prompt
 	cwd := r.SpaceDir
@@ -376,8 +376,9 @@ func fillPlan(row *matchRow, dec dispatch.Decision, line []byte) {
 	read := append([]string{r.SpaceDir}, r.Read...)
 	spec := harness.Spec{Harness: r.Harness, Model: r.Model, BudgetUSD: r.BudgetUSD, Args: r.Args,
 		Name: r.Rule + ":" + r.Last8(), Cwd: cwd, RunDir: "<run dir>", Timeout: r.TimeoutDur(), Write: write, Read: read,
-		Spool:  "<run dir>/events",
-		Prompt: dec.Prompt + supervise.Footer(r, cwd, line, write, read)}
+		Spool: "<run dir>/events", Bare: bare, Home: os.Getenv("HOME"),
+		Secrets: harness.Secrets(os.Getenv("HOME"), os.Getenv("XDG_STATE_HOME")),
+		Prompt:  dec.Prompt + supervise.Footer(r, cwd, line, write, read)}
 	cmd, err := harness.Build(spec)
 	if err != nil {
 		row.Why = err.Error()

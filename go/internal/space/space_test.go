@@ -145,6 +145,8 @@ func TestInvalid(t *testing.T) {
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: [--dangerously-skip-permissions]}`, "anfsd never skips permissions"},
 		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: ["--permission-mode=bypassPermissions"]}`, "anfsd never skips permissions"},
 		{"", `{name: r, on: {type: report.filed}, as: o, prompt: x, args: [--auto]}`, "anfsd never skips permissions"},
+		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: ["--mcp-config=/x.json"]}`, "anfsd never skips permissions"},
+		{"", `{name: r, on: {type: report.filed}, as: m, prompt: x, args: [--plugin-dir, /p]}`, "anfsd never skips permissions"},
 		{"access: [{path: /, mode: read}]\n", `{name: r, on: {type: report.filed}, as: m, prompt: x}`, "not / or $HOME itself"},
 		{"access: [{path: \"~\", mode: write}]\n", `{name: r, on: {type: report.filed}, as: m, prompt: x}`, "not / or $HOME itself"},
 		{"access: [{path: $HOME/, mode: write}]\n", `{name: r, on: {type: report.filed}, as: m, prompt: x}`, "not / or $HOME itself"},

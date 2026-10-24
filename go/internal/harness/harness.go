@@ -50,6 +50,31 @@ type Spec struct {
 	// Spool is the run's own events directory ($ANFS_EVENTS_SPOOL, 02d): writable by its shell
 	// only (anfs_emit), never by a harness's file tools
 	Spool string
+	// Home is the HOME the run gets: claude's settings name the person's own files under it (the
+	// user CLAUDE.md excluded, the credential files unreadable)
+	Home string
+	// Secrets are the files and directories the run's shell may not read (Secrets()): claude's
+	// sandbox.filesystem.denyRead; the other harnesses cannot deny a read
+	Secrets []string
+	// Bare is ANFSD_CLAUDE_BARE=on: claude --bare (API-key hosts only)
+	Bare bool
+}
+
+// Secrets are a host's credential files a run must not read (02d): the SSH keys, gh's and git's
+// tokens, netrc, Claude Code's own credentials, and the bus's passwords in STATE (a run with them
+// could publish past anfsd's stamp). state is XDG_STATE_HOME.
+func Secrets(home, state string) []string {
+	if state == "" {
+		state = home + "/.local/state"
+	}
+	return []string{
+		home + "/.ssh",
+		home + "/.config/gh",
+		home + "/.git-credentials",
+		home + "/.netrc",
+		home + "/.claude/.credentials.json",
+		state + "/nats",
+	}
 }
 
 // Cmd is what to run: argv (argv[0] the program), more environment, files to write in RunDir.

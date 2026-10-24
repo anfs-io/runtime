@@ -29,6 +29,13 @@ the run's it may write; core's `anfs_emit` writes there), and anfsd moves each l
 with the run's identity stamped (`actor`, `actorspace`, `actorrole`, `actorrun`; a differing claim
 kept in `actorclaimed`), refusing `run.*`, a line whose directory is not its scope, and anything
 past `ANFSD_RUN_EVENTS_MAX` (1000).
+**What a harness loads** is only what anfsd hands it: claude runs with `--setting-sources=` (no
+user, project or local settings file: no hooks, `env` or plugins from them), `--strict-mcp-config`
+(no MCP server), the person's `~/.claude/CLAUDE.md` excluded, its shell unable to read the
+credential files (`sandbox.filesystem.denyRead`) or its own key, and with no network;
+`ANFSD_CLAUDE_BARE=on` adds `--bare` for a host that authenticates with an API key. pi gets
+`--no-extensions --no-mcp --no-skills --no-prompt-templates --no-approve`; opencode its
+`OPENCODE_DISABLE_*` and `OPENCODE_PURE` (its global config has no switch).
 
 And **the podman follower** (agents/02c): one child, `podman events --format json --filter
 type=container --filter type=pod`, whose container and pod lifecycle (created, started, stopped,

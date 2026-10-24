@@ -18,14 +18,16 @@ func spec(h string) Spec {
 		Prompt: "Fix it.\n\n---\nfooter", Cwd: "/work/fix-r-1", RunDir: "/state/runs/r1", Timeout: 2 * time.Hour,
 		Write: []string{"/work/fix-r-1", "/tmp/anfs-work-501-3", "/notes/anfs"},
 		Read:  []string{"/spaces/anfs-dev", "/home/u/.local/share/anfs/sources"},
-		Spool: "/state/runs/r1/events",
+		Spool: "/state/runs/r1/events", Home: "/home/u", Secrets: Secrets("/home/u", ""),
 	}
 }
 
 // The command line and files per harness, as golden files (go test -update writes them)
 func TestGolden(t *testing.T) {
-	for _, h := range []string{"claude", "opencode", "pi", "antigravity"} {
-		c, err := Build(spec(h))
+	for _, h := range []string{"claude", "claude-bare", "opencode", "pi", "antigravity"} {
+		sp := spec(strings.TrimSuffix(h, "-bare"))
+		sp.Bare = strings.HasSuffix(h, "-bare")
+		c, err := Build(sp)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +62,8 @@ func TestGolden(t *testing.T) {
 func TestClaudeSettings(t *testing.T) {
 	c, _ := Build(spec("claude"))
 	var cfg struct {
-		Permissions struct {
+		ClaudeMdExcludes []string `json:"claudeMdExcludes"`
+		Permissions      struct {
 			DefaultMode string   `json:"defaultMode"`
 			Allow       []string `json:"allow"`
 			Deny        []string `json:"deny"`
@@ -71,7 +74,14 @@ func TestClaudeSettings(t *testing.T) {
 			AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands"`
 			Filesystem               struct {
 				AllowWrite []string `json:"allowWrite"`
+				DenyRead   []string `json:"denyRead"`
 			} `json:"filesystem"`
+			Credentials struct {
+				EnvVars []struct {
+					Name string `json:"name"`
+					Mode string `json:"mode"`
+				} `json:"envVars"`
+			} `json:"credentials"`
 		} `json:"sandbox"`
 	}
 	dec := json.NewDecoder(strings.NewReader(string(c.Files["claude.json"])))
@@ -107,8 +117,33 @@ func TestClaudeSettings(t *testing.T) {
 			t.Errorf("the spool in a file tool's allow: %s", a)
 		}
 	}
-	// never a flag that skips permissions; the prompt is last, after --
+	// the person's credential files unreadable by the shell; claude's key unset in it; the
+	// person's CLAUDE.md and rules not loaded
+	if strings.Join(cfg.Sandbox.Filesystem.DenyRead, " ") != "/home/u/.claude/.credentials.json /home/u/.config/gh /home/u/.git-credentials /home/u/.local/state/nats /home/u/.netrc /home/u/.ssh" {
+		t.Errorf("denyRead %v", cfg.Sandbox.Filesystem.DenyRead)
+	}
+	var ev []string
+	for _, e := range cfg.Sandbox.Credentials.EnvVars {
+		ev = append(ev, e.Name+"="+e.Mode)
+	}
+	if strings.Join(ev, " ") != "ANTHROPIC_API_KEY=deny CLAUDE_CODE_OAUTH_TOKEN=deny" {
+		t.Errorf("credentials.envVars %v", ev)
+	}
+	if strings.Join(cfg.ClaudeMdExcludes, " ") != "/home/u/.claude/CLAUDE.md /home/u/.claude/rules/**" {
+		t.Errorf("claudeMdExcludes %v", cfg.ClaudeMdExcludes)
+	}
+	// no setting file but --settings, no MCP; the scrub; --bare only when asked
 	a := strings.Join(c.Argv, " ")
+	if !strings.Contains(a, " --settings /state/runs/r1/claude.json --setting-sources= --strict-mcp-config ") || strings.Contains(a, "--bare") ||
+		strings.Join(c.Env, " ") != "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" {
+		t.Errorf("argv %v env %v", c.Argv, c.Env)
+	}
+	bs := spec("claude")
+	bs.Bare = true
+	if b, _ := Build(bs); !strings.Contains(strings.Join(b.Argv, " "), " --strict-mcp-config --bare ") {
+		t.Errorf("bare %v", b.Argv)
+	}
+	// never a flag that skips permissions; the prompt is last, after --
 	if strings.Contains(a, "dangerously") || strings.Contains(a, "bypass") || c.Argv[len(c.Argv)-2] != "--" {
 		t.Errorf("argv %v", c.Argv)
 	}

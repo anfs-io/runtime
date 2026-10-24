@@ -46,6 +46,8 @@ type Supervisor struct {
 	Logf       func(string, ...any)
 	// RunEventsMax is the most lines a run's spool may put in the log (ANFSD_RUN_EVENTS_MAX)
 	RunEventsMax int
+	// ClaudeBare is ANFSD_CLAUDE_BARE=on: claude runs with --bare (an API key, no OAuth)
+	ClaudeBare bool
 
 	mu      sync.Mutex
 	ctx     context.Context
@@ -403,7 +405,8 @@ func (s *Supervisor) execute(r *Record) {
 	spec := harness.Spec{
 		Harness: r.Harness, Model: r.Model, BudgetUSD: r.BudgetUSD, Args: r.Args,
 		Name: r.Rule + ":" + r.Last8(), Cwd: cwd, RunDir: dir, Timeout: r.TimeoutDur(),
-		Write: write, Read: read, Spool: spoolDir,
+		Write: write, Read: read, Spool: spoolDir, Bare: s.ClaudeBare,
+		Home: getEnv(env, "HOME"), Secrets: harness.Secrets(getEnv(env, "HOME"), getEnv(env, "XDG_STATE_HOME")),
 		Prompt: string(body) + Footer(r, cwd, bytes.TrimSpace(eventLine), write, read),
 	}
 	cmd, err := harness.Build(spec)

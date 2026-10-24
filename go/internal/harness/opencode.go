@@ -8,7 +8,10 @@ import (
 // opencode (1.18.35's `opencode run --help`): run in the cwd with JSON events; access through
 // OPENCODE_CONFIG_CONTENT: permission.external_directory (each path allow, everything else deny:
 // one permission for read and write) and permission.bash (the denials deny, the rest allow). Its
-// own docs call bash's path checks advisory: partial.
+// own docs call bash's path checks advisory: partial. What it loads (02d, names from 1.18.35's
+// binary): no project config files, nothing of ~/.claude (CLAUDE.md, skills), no external skill
+// scans, no external plugins (OPENCODE_PURE). The global ~/.config/opencode (its MCP servers, and
+// .opencode directories) has no switch: not isolated, documented.
 func opencode(s Spec) (Cmd, error) {
 	ext := map[string]string{"*": "deny"}
 	for _, p := range uniq(append(append([]string{s.Spool}, s.Read...), s.Write...)) {
@@ -29,7 +32,8 @@ func opencode(s Spec) (Cmd, error) {
 	}
 	argv = append(argv, s.Args...)
 	argv = append(argv, s.Prompt) // its help shows no --: the message is the positional
-	return Cmd{Argv: argv, Env: []string{"OPENCODE_CONFIG_CONTENT=" + string(cfg)}}, nil
+	return Cmd{Argv: argv, Env: []string{"OPENCODE_CONFIG_CONTENT=" + string(cfg),
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1", "OPENCODE_DISABLE_CLAUDE_CODE=1", "OPENCODE_DISABLE_EXTERNAL_SKILLS=1", "OPENCODE_PURE=1"}}, nil
 }
 
 func opencodeSummary(out []byte) string { return lastText(out) }

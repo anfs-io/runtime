@@ -3,6 +3,11 @@ pi
 -p
 --mode
 json
+--no-extensions
+--no-mcp
+--no-skills
+--no-prompt-templates
+--no-approve
 --model
 m1
 --

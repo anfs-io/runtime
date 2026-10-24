@@ -113,7 +113,7 @@ func TestMatchCommand(t *testing.T) {
 		"event: report.filed r-20261023-9 in anfs-dev by shell:",
 		"anfs-dev/fix-core-report (ok): submit",
 		"job:     anfs work new fix-r-20261023-9 core",
-		"command: claude -p --output-format stream-json --verbose --permission-mode dontAsk --settings '<run dir>/claude.json'",
+		"command: claude -p --output-format stream-json --verbose --permission-mode dontAsk --settings '<run dir>/claude.json' --setting-sources= --strict-mcp-config ",
 		"--max-budget-usd 2",
 		`-- 'Fix r-20261023-9: It broke. (+ anfsd'\''s footer)'`,
 		"anfs-dev/off (disabled): disabled: would submit, but the rule has enabled: false",

@@ -172,6 +172,7 @@ func daemon(logf func(string, ...any)) int {
 		Logf:    logf,
 
 		RunEventsMax: cfg.Settings.RunEventsMax,
+		ClaudeBare:   cfg.Settings.ClaudeBare,
 	}
 	if err := sup.Start(ctx); err != nil {
 		logf("runs: %v", err)

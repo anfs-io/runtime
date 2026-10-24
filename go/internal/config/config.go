@@ -40,6 +40,7 @@ type Settings struct {
 	MaxRuns        int           // ANFSD_MAX_RUNS (2): runs at once on this host
 	Podman         bool          // ANFSD_PODMAN (on): follow podman events into the host scope
 	RunEventsMax   int           // ANFSD_RUN_EVENTS_MAX (1000): lines a run's spool may put in the log
+	ClaudeBare     bool          // ANFSD_CLAUDE_BARE (off): claude --bare (ANTHROPIC_API_KEY or apiKeyHelper only)
 }
 
 // Nats is how anfsd connects: the URL from core/nats's port file, the anfsd user and its password.
@@ -148,7 +149,7 @@ func ReadSettings(p Paths, lookup func(string) (string, bool)) (map[string]strin
 
 var settingNames = []string{
 	"ANFSD_STREAM_MAX_AGE", "ANFSD_STREAM_MAX_BYTES", "ANFSD_DUP_WINDOW", "ANFSD_SHIP_RATE", "ANFSD_SHIP_BURST", "ANFSD_MAX_RUNS", "ANFSD_PODMAN",
-	"ANFSD_RUN_EVENTS_MAX",
+	"ANFSD_RUN_EVENTS_MAX", "ANFSD_CLAUDE_BARE",
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -234,6 +235,13 @@ func ParseSettings(vals map[string]string) (Settings, error) {
 		if s.RunEventsMax, err = strconv.Atoi(v); err != nil || s.RunEventsMax < 1 {
 			return s, fmt.Errorf("ANFSD_RUN_EVENTS_MAX=%s: a positive whole number", v)
 		}
+	}
+	switch v := vals["ANFSD_CLAUDE_BARE"]; v {
+	case "", "off":
+	case "on":
+		s.ClaudeBare = true
+	default:
+		return s, fmt.Errorf("ANFSD_CLAUDE_BARE=%s: on or off", v)
 	}
 	switch v := vals["ANFSD_PODMAN"]; v {
 	case "", "on":

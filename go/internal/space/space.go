@@ -190,6 +190,9 @@ var skipFlags = []string{
 	"bypassPermissions", "--permission-mode", "--permission-prompts", "--settings", "--setting-sources",
 	"--add-dir", "--sandbox", "--no-sandbox", "--dir", "--tools", "--no-tools", "--allowedTools",
 	"--allowed-tools", "--disallowedTools", "--disallowed-tools",
+	// what a dispatched harness loads (02d): no more MCP servers or plugins than anfsd gives
+	"--mcp-config", "--strict-mcp-config", "--plugin-dir", "--plugin-dir-no-mcp", "--bare", "--safe-mode",
+	"--extension", "--approve",
 }
 
 // Load reads one space.yml. path is the space's wsm path and dir its directory (both for display

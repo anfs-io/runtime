@@ -13,6 +13,22 @@ import (
 // file (permissions and the sandbox), --add-dir for every path beyond the cwd. The prompt goes
 // after --: --add-dir takes several values.
 //
+// What it loads (02d): --setting-sources= (empty: no user, project or local settings file; only
+// --settings and managed policy. 2.1.296's own --restricted sets the same empty list, and it
+// forwards the flag to its children as --setting-sources=<list>) and --strict-mcp-config with no
+// --mcp-config (no MCP server at all, the user's in ~/.claude.json included). So no user or
+// project hooks, env, plugins or MCP. The person's own CLAUDE.md and rules are excluded by
+// claudeMdExcludes; the repos' CLAUDE.md and AGENTS.md still load. User skills and subagents
+// (~/.claude/skills, ~/.claude/agents) still load: definitions the agent may use, not code that
+// runs by itself. ANFSD_CLAUDE_BARE=on adds --bare (no OAuth or keychain: ANTHROPIC_API_KEY or an
+// apiKeyHelper only).
+//
+// The sandboxed shell: it writes only the job, its TMPDIR, access:'s write paths and the run's
+// spool (not the file tools: Edit/Write allows leave the spool out); reads none of Secrets
+// (denyRead); has claude's key unset (credentials.envVars deny); and has no network (dontAsk
+// refuses every host outside allowedDomains, which is empty). CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
+// strips the credential from every subprocess, hooks included.
+//
 // Under -p a settings file that fails validation is silently ignored (its --help says so), so
 // anfsd writes it from a struct and the tests check its shape; sandbox.failIfUnavailable makes a
 // missing sandbox backend a failure instead of an unconfined shell, and allowUnsandboxedCommands
@@ -41,15 +57,30 @@ func claude(s Spec) (Cmd, error) {
 			"enabled":                  true,
 			"failIfUnavailable":        true,
 			"allowUnsandboxedCommands": false,
-			"filesystem":               map[string]any{"allowWrite": uniq(append(append([]string{}, write...), s.Spool))},
+			"filesystem": map[string]any{
+				"allowWrite": uniq(append(append([]string{}, write...), s.Spool)),
+				"denyRead":   uniq(s.Secrets),
+			},
+			"credentials": map[string]any{
+				"envVars": []map[string]string{
+					{"name": "ANTHROPIC_API_KEY", "mode": "deny"},
+					{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"},
+				},
+			},
 		},
+	}
+	if s.Home != "" {
+		cfg["claudeMdExcludes"] = []string{s.Home + "/.claude/CLAUDE.md", s.Home + "/.claude/rules/**"}
 	}
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return Cmd{}, err
 	}
 	argv := []string{"claude", "-p", "--output-format", "stream-json", "--verbose",
-		"--permission-mode", "dontAsk", "--settings", settings}
+		"--permission-mode", "dontAsk", "--settings", settings, "--setting-sources=", "--strict-mcp-config"}
+	if s.Bare {
+		argv = append(argv, "--bare")
+	}
 	for _, p := range uniq(append(append([]string{}, s.Read...), s.Write...)) {
 		if p != s.Cwd {
 			argv = append(argv, "--add-dir", p)
@@ -64,7 +95,8 @@ func claude(s Spec) (Cmd, error) {
 	argv = append(argv, "--name", s.Name)
 	argv = append(argv, s.Args...)
 	argv = append(argv, "--", s.Prompt)
-	return Cmd{Argv: argv, Files: map[string][]byte{"claude.json": append(b, '\n')}}, nil
+	return Cmd{Argv: argv, Env: []string{"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"},
+		Files: map[string][]byte{"claude.json": append(b, '\n')}}, nil
 }
 
 // An absolute path in a permission rule is //path; everything under it is /**
