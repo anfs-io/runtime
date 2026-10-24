@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +193,70 @@ func TestMaxMsgSize(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("no ack")
 		}
+	}
+}
+
+// A layer's publisher user, as core/nats renders it (testdata/core-nats-users.conf): cnfs stores
+// on its own subjects (anfs.<scope>.cnfs.>), is refused anfs's and another layer's, and stream
+// management; it makes and reads its own consumer
+func TestLayerUser(t *testing.T) {
+	conf, err := os.ReadFile("testdata/core-nats-users.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := testnats.StartConfig(t, string(conf))
+	a := connect(t, s, "anfsd", "anfsdpw")
+	if err := a.EnsureStream(ctx(t), StreamSettings{MaxAge: time.Hour, MaxBytes: 1 << 20, DupWindow: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	nc, err := nats.Connect(s.URL(), nats.UserInfo("cnfs", "cnfspw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	js, _ := jetstream.New(nc)
+	pub := func(subject string) error {
+		c, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := js.Publish(c, subject, []byte(`{}`))
+		return err
+	}
+	if err := pub("anfs.m2vq7cfr4k.cnfs.partitia.report.filed"); err != nil {
+		t.Errorf("its own subject: %v", err)
+	}
+	if err := pub("anfs.host.cnfs.appwork.worker.started"); err != nil {
+		t.Errorf("its own subject on the host: %v", err)
+	}
+	for _, subj := range []string{"anfs.m2vq7cfr4k.anfs.report.filed", "anfs.q7mwx4ne2r.lgat.escrow.payment.settled", "anfs.m2vq7cfr4k.report.filed"} {
+		if err := pub(subj); err == nil {
+			t.Errorf("%s: stored", subj)
+		}
+	}
+	c, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := js.DeleteStream(c, Stream); err == nil {
+		t.Error("cnfs deleted the stream")
+	}
+	c2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	cons, err := js.CreateOrUpdateConsumer(c2, Stream, jetstream.ConsumerConfig{Durable: "cnfs-test", FilterSubject: "anfs.*.cnfs.>", AckPolicy: jetstream.AckExplicitPolicy, DeliverPolicy: jetstream.DeliverAllPolicy})
+	if err != nil {
+		t.Fatalf("its own consumer: %v", err)
+	}
+	batch, err := cons.Fetch(2, jetstream.FetchMaxWait(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for m := range batch.Messages() {
+		m.Ack()
+		n++
+	}
+	if n != 2 {
+		t.Errorf("read %d of its 2", n)
+	}
+	info, _ := a.StreamInfo(ctx(t))
+	if info.State.Msgs != 2 {
+		t.Errorf("%d messages in the stream", info.State.Msgs)
 	}
 }

@@ -10,7 +10,8 @@
 # $ANFS_EVENTS_SPOOL through core's anfs_emit when ANFS_CORE_LIB names a core checkout's lib/anfs
 # (else a printf'd line), and they reach the stream stamped with the run's identity; a forged
 # actor arrives with actorclaimed; the run's environment lacks what anfsd's had (SSH_AUTH_SOCK,
-# GH_TOKEN). The other tests turn podman off (ANFSD_PODMAN=off), so a Linux
+# GH_TOKEN). The recorder (05b): cnfs's direct publish, as core/nats's layer user, lands in
+# <scope>/<YYYY-MM>.bus.jsonl, the spool's lines do not. The other tests turn podman off (ANFSD_PODMAN=off), so a Linux
 # host's /usr/bin/podman is never run. Skipped, saying so, when nats-server or the nats CLI is not
 # on PATH.
 # Run: bats go/test/e2e.bats </dev/null   (from the repo's root; CI puts the pinned binaries on PATH)
@@ -44,6 +45,14 @@ authorization {
   users: [
     {user: anfsd, password: anfsdpw}
     {user: admin, password: adminpw}
+    {
+      user: cnfs, password: cnfspw
+      permissions: {
+        subscribe: {allow: ["anfs.>", "_INBOX.>"]}
+        publish: {allow: ["anfs.*.cnfs.>", "\$JS.API.INFO", "\$JS.API.STREAM.INFO.ANFS", "\$JS.API.CONSUMER.*.ANFS.>",
+          "\$JS.API.CONSUMER.DURABLE.CREATE.ANFS.>", "\$JS.API.CONSUMER.MSG.NEXT.ANFS.>", "\$JS.ACK.ANFS.>"]}
+      }
+    }
   ]
 }
 CONF
@@ -72,6 +81,16 @@ line() {
   [[ "$scope" == host ]] || src="/anfs/spaces/$scope"
   printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"%s","type":"io.anfs.report.filed","subject":"r-%d","time":"2026-10-23T17:46:18.939Z","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"n":"%d"}}\n' \
     "$n" "$src" "$n" "$n"
+}
+
+# Now, to the second, for a line written now: T the time attribute, M its month, P the id's first
+# 13 characters (its milliseconds: the profile's time.id)
+now() {
+  local s
+  s=$(date -u +%s)
+  T=$(date -u -r "$s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d "@$s" +%Y-%m-%dT%H:%M:%S.000Z)
+  M=${T:0:7}
+  P=$(printf '%08x-%04x' $(( s * 1000 >> 16 )) $(( s * 1000 & 65535 )))
 }
 
 spool() {
@@ -125,6 +144,33 @@ ids() {
   [ "$(yq -p json -oy -r '.config.max_age' <<< "$output")" = 7776000000000000 ]
   [ "$(yq -p json -oy -r '.config.max_bytes' <<< "$output")" = 1073741824 ]
   [ "$(yq -p json -oy -r '.config.duplicate_window' <<< "$output")" = 86400000000000 ]
+}
+
+@test "the recorder: cnfs's direct publish is in <scope>/<month>.bus.jsonl once; the spool's lines are not; anfs's subjects are refused to cnfs" {
+  spool host 1 3
+  start_anfsd
+  wait_msgs 3
+  local ex="$BATS_TEST_DIRNAME/../internal/cloudevent/testdata/spec/examples/valid" body id
+  body=$(< "$ex/cnfs-partitia-report-filed.jsonl")
+  id=$(yq -p json -oy -r '.id' <<< "$body")
+  for i in 1 2; do
+    nats --user cnfs --password cnfspw pub -J -H "Nats-Msg-Id:$id" -H "Content-Type:application/cloudevents+json" \
+      anfs.m2vq7cfr4k.cnfs.partitia.report.filed --force-stdin <<< "$body" >/dev/null
+  done
+  run nats --user cnfs --password cnfspw pub -J anfs.abcde23456.anfs.report.filed '{}'
+  [ "$status" -ne 0 ]
+  wait_msgs 4
+  local rec="$EV/m2vq7cfr4k/2026-10.bus.jsonl"
+  for i in $(seq 50); do [[ -s "$rec" ]] && break; sleep 0.1; done
+  [ "$(cat "$rec")" = "$body" ] || { cat "$rec"; cat "$BATS_TEST_TMPDIR/anfsd.log"; false; }
+  # the spool's own lines: known, never recorded
+  sleep 0.5
+  [ ! -e "$EV/host/2026-10.bus.jsonl" ]
+  run nats consumer info ANFS anfsd-recorder --json
+  [ "$(yq -p json -oy -r '.ack_floor.stream_seq' <<< "$output")" = 4 ]
+  [ "$(yq -p json -oy -r '.config.deliver_policy' <<< "$output")" = all ]
+  # the stream refuses a body over 4095 bytes with the two headers
+  [ "$(nats stream info ANFS --json | yq -p json -oy -r '.config.max_msg_size')" = 4202 ]
 }
 
 @test "kill -9, append, restart: still once each" {
@@ -188,8 +234,9 @@ YML
     nats consumer info ANFS anfsd-dispatch --json >/dev/null 2>&1 && break
     sleep 0.1
   done
-  printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261023-9","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"package":"core/pcm","title":"t","to":"file"}}\n' \
-    99 "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
+  now
+  printf '{"specversion":"1.0","id":"%s-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261023-9","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"package":"core/pcm","title":"t","to":"file"}}\n' \
+    "$P" 99 "$T" >> "$EV/abcde23456/$M.jsonl"
   for i in $(seq 150); do
     [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.anfs.run.completed": 1'* ]] && break
     sleep 0.2
@@ -248,8 +295,11 @@ emit() {
     bash -c 'source "\$HOME/.local/lib/anfs/paths.sh"; source "\$ANFS_LIB_DIR/log.sh"; source "\$ANFS_LIB_DIR/events.sh"; anfs_emit report.closed "\$1" to=file' _ "\$subj"
   else
     mkdir -p "\$ANFS_EVENTS_SPOOL/abcde23456"
-    printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012d","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","subject":"%s","time":"%s","datacontenttype":"application/json","actor":"%s","anfsv":1,"data":{"to":"file"}}\n' \
-      "\${subj##*-}" "\$subj" "\$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" "\$ANFS_ACTOR" >> "\$ANFS_EVENTS_SPOOL/abcde23456/\$(date -u +%Y-%m).jsonl"
+    s=\$(date -u +%s)
+    t=\$(date -u -r "\$s" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d "@\$s" +%Y-%m-%dT%H:%M:%S.000Z)
+    p=\$(printf '%08x-%04x' \$(( s * 1000 / 65536 )) \$(( s * 1000 % 65536 )))
+    printf '{"specversion":"1.0","id":"%s-7000-8000-%012d","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.closed","subject":"%s","time":"%s","datacontenttype":"application/json","actor":"%s","anfsv":1,"data":{"to":"file"}}\n' \
+      "\$p" "\${subj##*-}" "\$subj" "\$t" "\$ANFS_ACTOR" >> "\$ANFS_EVENTS_SPOOL/abcde23456/\$(echo "\$t" | cut -c1-7).jsonl"
   fi
 }
 case "\$subj" in
@@ -266,9 +316,10 @@ SH
     nats consumer info ANFS anfsd-dispatch --json >/dev/null 2>&1 && break
     sleep 0.1
   done
+  now
   for i in 1 2 3; do
-    printf '{"specversion":"1.0","id":"01a169de-e9bb-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261024-%d","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"to":"file"}}\n' \
-      "$(( 90 + i ))" "$i" "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" >> "$EV/abcde23456/$(date -u +%Y-%m).jsonl"
+    printf '{"specversion":"1.0","id":"%s-7000-8000-%012x","source":"/anfs/spaces/abcde23456","type":"io.anfs.report.filed","subject":"r-20261024-%d","time":"%s","datacontenttype":"application/json","actor":"shell:e2e","anfsv":1,"data":{"to":"file"}}\n' \
+      "$P" "$(( 90 + i ))" "$i" "$T" >> "$EV/abcde23456/$M.jsonl"
   done
   for i in $(seq 150); do
     [[ "$(nats stream subjects ANFS --json 2>/dev/null)" == *'"anfs.abcde23456.anfs.run.completed": 3'* ]] && break

@@ -6,6 +6,8 @@ package testnats
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -40,6 +42,28 @@ func Start(t testing.TB, users Users) *Server {
 	for u, p := range users {
 		s.opts.Users = append(s.opts.Users, &server.User{Username: u, Password: p})
 	}
+	s.start()
+	s.Port = s.srv.Addr().(*net.TCPAddr).Port
+	s.opts.Port = s.Port
+	t.Cleanup(s.Stop)
+	return s
+}
+
+// StartConfig runs a server from a NATS config file's text (its authorization block: users and
+// permissions as core/nats renders them) on a random port with the store in the test's temp dir.
+func StartConfig(t testing.TB, conf string) *Server {
+	t.Helper()
+	s := &Server{t: t, Store: t.TempDir()}
+	f := filepath.Join(t.TempDir(), "server.conf")
+	if err := os.WriteFile(f, []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o, err := server.ProcessConfigFile(f)
+	if err != nil {
+		t.Fatalf("nats config: %v", err)
+	}
+	o.Host, o.Port, o.JetStream, o.StoreDir, o.NoLog, o.NoSigs, o.HTTPPort = "127.0.0.1", -1, true, s.Store, true, true, 0
+	s.opts = *o
 	s.start()
 	s.Port = s.srv.Addr().(*net.TCPAddr).Port
 	s.opts.Port = s.Port
